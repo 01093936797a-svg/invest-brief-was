@@ -87,7 +87,7 @@ export type PortfolioSummary = {
   dayDiff: number;
   dayPct: number;
   byCategory: { category: string; value: number; pct: number }[];
-  movers: { name: string; dayPct: number; dayDiff: number }[];
+  movers: { name: string; account: string; dayPct: number; dayDiff: number }[];
   holdings: {
     name: string;
     account: string;
@@ -168,7 +168,7 @@ export async function computePortfolio(holdings: Holding[]): Promise<PortfolioSu
     dayDiff: total - prevTotal,
     dayPct: prevTotal ? ((total - prevTotal) / prevTotal) * 100 : 0,
     byCategory,
-    movers: movers.slice(0, 6).map((m) => ({ name: m.name, dayPct: m.dayPct, dayDiff: m.dayDiff })),
+    movers: movers.slice(0, 6).map((m) => ({ name: m.name, account: m.account, dayPct: m.dayPct, dayDiff: m.dayDiff })),
     holdings: rows.map((r) => ({
       name: r.name,
       account: r.account,

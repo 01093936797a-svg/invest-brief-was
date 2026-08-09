@@ -62,6 +62,7 @@ export type TqqqSignal = {
     cashPct: number;
     actionShares?: number;
     actionNote?: string;
+    caveat?: string;
   } | null;
 };
 
@@ -98,6 +99,9 @@ export async function computeTqqqSignal(holdings: Holding[], ticker = "TQQQ"): P
     const totalPool = heldValueKrw + cashKrw;
     const tqqqPct = totalPool ? (heldValueKrw / totalPool) * 100 : 0;
     cashContext = { heldQty: held.quantity, cashKrw, tqqqPct, cashPct: 100 - tqqqPct };
+    if (cash.note && /추정/.test(cash.note)) {
+      cashContext.caveat = `대기현금 금액은 추정치(${cash.note}) — 실제 계좌 잔액과 다를 수 있음`;
+    }
     if (verdict === "BUY") {
       const shares = Math.floor(cashKrw / priceKrw);
       cashContext.actionShares = shares;

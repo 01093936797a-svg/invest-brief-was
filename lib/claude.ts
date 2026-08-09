@@ -68,12 +68,13 @@ export async function composeBrief(params: {
 전일 대비: ${sgn(portfolio.dayDiff)}${won(portfolio.dayDiff)}원 (${sgn(portfolio.dayPct)}${portfolio.dayPct.toFixed(2)}%)
 평가손익(매입 대비): ${sgn(portfolio.gain)}${won(portfolio.gain)}원 (${portfolio.gainPct.toFixed(1)}%)
 자산배분: ${portfolio.byCategory.map((c) => `${c.category} ${c.pct.toFixed(1)}%`).join(", ")}
-오늘 등락 큰 종목: ${portfolio.movers.slice(0, 3).map((m) => `${m.name} ${sgn(m.dayPct)}${m.dayPct.toFixed(2)}%`).join(", ") || "없음"}
+오늘 등락 큰 종목: ${portfolio.movers.slice(0, 3).map((m) => `${m.name}(${m.account}) ${sgn(m.dayPct)}${m.dayPct.toFixed(2)}%`).join(", ") || "없음"}
 
 [TQQQ 현금비중 신호 — 기계적 결과, 그대로 반영]
 판정: ${signal.verdict} — ${signal.reason}
 ${signal.cashContext ? `현금비중 현황: TQQQ ${signal.cashContext.tqqqPct.toFixed(0)}% : 현금 ${signal.cashContext.cashPct.toFixed(0)}%` : "현금비중 데이터 없음"}
 ${signal.cashContext?.actionNote ? `실행 규모: ${signal.cashContext.actionNote}` : ""}
+${signal.cashContext?.caveat ? `⚠️ ${signal.cashContext.caveat} — 메시지에도 이 불확실성을 짧게 표시할 것` : ""}
 
 [오늘 시장 리서치 — 정보수집가가 확인한 사실]
 ${marketResearch}
@@ -118,7 +119,7 @@ ${marketResearch}
 
 ■ TQQQ 현금비중 신호
 - 판정 + 사유 한 줄
-- 현금비중 현황
+- 현금비중 현황 (추정치 경고 있으면 "현금 X%(추정)"처럼 짧게 표시)
 - (신호 떴으면) 실행 규모 한 줄
 
 💡 인사이트: (시장→내 자산 연결, 관련 있으면 life-stage 프레임 한 스푼)
