@@ -46,3 +46,14 @@ Set as Vercel project environment variables (`.env.example` lists all of them), 
 - `SLACK_WEBHOOK_URL` — send-only, one fixed channel
 - `DASHBOARD_URL` — optional, appended to the brief if set; points at the (separately, manually republished) visualization Artifact from the sibling project — this WAS does not generate or update that dashboard
 - `CRON_SECRET` — arbitrary string; Vercel echoes it as the cron request's bearer token, `api/daily-brief.ts` checks it if present
+- `SLACK_BOT_TOKEN` / `SLACK_SIGNING_SECRET` — from the Slack App's OAuth install (Bot User OAuth Token) and Basic Information page. Used only by `api/slack-interact.ts`: the bot token calls `views.open` to show the asset-change modal, the signing secret verifies every incoming Interactivity request (HMAC over the raw body) before anything is trusted. The daily brief itself still goes out over the plain `SLACK_WEBHOOK_URL` — app-scoped incoming webhooks support Block Kit buttons, so a bot token isn't needed just to send messages.
+
+## Slack-native asset updates (`api/slack-interact.ts`)
+
+The daily brief now ends with "어제 자산 변동 있었나요?" (있음/없음) buttons. "있음" opens a modal (existing holdings only — new tickers aren't supported here, use `scripts/seed-holdings.mjs`) to record a buy/sell against `holdings` directly, making Supabase editable in near-real-time instead of only through the manual local-app + reseed flow. Key invariants, don't relax these without re-reading why:
+
+- Every request is signature-verified (`lib/slack-verify.ts`) before the payload is trusted — this endpoint is public.
+- The holding row is re-fetched by id inside `view_submission`, never trusted from modal-open time — prevents a stale-read race.
+- Selling more than currently held is rejected inline (`response_action: "errors"`), never silently clamped.
+- Buying with no fill price leaves `buy_price` (avg cost) unchanged — only `quantity` moves. A wrong guessed price would be worse than a stale one here.
+- The holdings dropdown is built fresh per click and labeled `"{name} ({note})"` — two holdings can share a `name` across different accounts (e.g. `TIME 미국S&P500액티브` in both 신한 ISA and 삼성 연금저축), so the row's numeric `id` is always what's actually submitted.

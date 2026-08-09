@@ -3,7 +3,8 @@
 // 그 값으로 외부의 무단 호출을 막는다.
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { runAnalysis, runCompose } from "../lib/pipeline.js";
-import { sendSlack } from "../lib/slack.js";
+import { sendSlack, sendSlackBlocks } from "../lib/slack.js";
+import { buildDailyBriefBlocks } from "../lib/slack-blocks.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const secret = process.env.CRON_SECRET;
@@ -14,7 +15,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const analysis = await runAnalysis();
     const text = await runCompose(analysis);
-    await sendSlack(text);
+    await sendSlackBlocks(buildDailyBriefBlocks(text), text);
     return res.status(200).json({ ok: true, sent: text.slice(0, 200) + "..." });
   } catch (err: any) {
     console.error("daily-brief 실패:", err);
