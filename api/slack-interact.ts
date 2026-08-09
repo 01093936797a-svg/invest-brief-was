@@ -32,6 +32,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!payloadRaw) return res.status(400).json({ error: "no payload" });
   const payload = JSON.parse(payloadRaw);
 
+  console.log(
+    "slack-interact debug:",
+    JSON.stringify({
+      type: payload.type,
+      action_id: payload.actions?.[0]?.action_id,
+      callback_id: payload.view?.callback_id,
+      retryNum: req.headers["x-slack-retry-num"],
+      retryReason: req.headers["x-slack-retry-reason"],
+    })
+  );
+
   // --- 버튼 클릭 ---
   if (payload.type === "block_actions") {
     const action = payload.actions?.[0];
