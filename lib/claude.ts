@@ -4,6 +4,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { PortfolioSummary } from "./portfolio.js";
 import type { TqqqSignal } from "./signal.js";
+import { investmentPolicy } from "./policy.js";
 
 function client() {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -76,6 +77,11 @@ ${signal.cashContext?.actionNote ? `실행 규모: ${signal.cashContext.actionNo
 
 [오늘 시장 리서치 — 정보수집가가 확인한 사실]
 ${marketResearch}
+
+[확정 투자정책 — research-team이 이미 합의한 기준, 관련있을 때만 인사이트에 참고]
+위험성향: ${investmentPolicy.riskProfile} (목표배분 주식${investmentPolicy.targetAllocation.stock}·채권${investmentPolicy.targetAllocation.bond}·현금${investmentPolicy.targetAllocation.cash}·대체${investmentPolicy.targetAllocation.alt}%. 채권·대체는 asset-tracker가 별도 분류하지 않으므로 정밀 비교 금지, 주식/현금 쏠림 정도만 참고)
+절세계좌: ${investmentPolicy.taxAccounts.note}
+변동성 방침: ${investmentPolicy.volatilityPolicy}
 `.trim();
 
   const response = await anthropic.messages.create({
@@ -93,6 +99,7 @@ ${marketResearch}
 - 하루 등락(±1~3%)은 30대·장기투자 관점에서 노이즈에 가깝다 — 과장해서 불안 조성하지 않는다. ±5% 이상이나 추세 전환일 때만 톤을 올린다.
 - 절세계좌 비중이 크다는 건 이미 잘하고 있는 것 — 걱정거리처럼 쓰지 않는다.
 - 인사이트는 그날 실제로 관련 있을 때만 life-stage 프레임(내집마련 자금 타임라인, 리스크 한도 등)을 살짝 얹는다. 매일 억지로 끼워넣지 않는다.
+- [확정 투자정책] 블록은 research-team이 이미 합의한 기준이다. 오늘 수치가 그 기준과 눈에 띄게 어긋날 때만(예: 주식 쏠림이 목표보다 뚜렷이 높음, 절세계좌 연간 한도 마감 임박) 짧게 언급하고, 아니면 그냥 넘어간다.
 - 전체 15~18줄, 아침 30초 안에 읽히게. 지시("사라/팔아")가 아니라 관찰·양면 제시로.
 - 끝에 반드시 한 줄: "※ 참고용 관찰이며 투자판단은 본인 책임."
 
