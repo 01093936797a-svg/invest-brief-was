@@ -63,9 +63,21 @@ export async function researchMarket(holdings: Holding[], kind: BriefKind): Prom
 - 코인은 큰 변동 있을 때만 한 줄`;
 
   const response = await anthropic.messages.create({
-    model: "claude-opus-5",
-    max_tokens: 2000,
-    tools: [{ type: "web_search_20260209", name: "web_search" }],
+    // 이 호출은 "검색해서 사실을 뽑아오는" 작업 — 입력 토큰이 압도적으로 많고 어려운 추론은 없다.
+    // 웹서치 결과가 대화에 누적되고 매 iteration마다 전체를 다시 보내기 때문에 비용의 대부분이 여기서 나온다.
+    // 그래서 입력 단가가 싼 Sonnet으로 내리고, effort를 낮춰 검색 횟수 자체를 줄인다.
+    model: "claude-sonnet-5",
+    // thinking은 항상 명시한다 — 모델마다 "생략 시 기본값"이 다르다(Opus 4.8은 꺼짐, Opus 5·Sonnet 5는 켜짐).
+    // 생략에 기대면 모델을 바꿀 때 사고 비용이 조용히 붙는다. 실제로 그래서 요금이 샜다.
+    thinking: { type: "adaptive" },
+    // effort가 낮으면 사고 토큰만 주는 게 아니라 툴 호출도 더 적고 통합적으로 나간다 —
+    // 검색 1회가 줄면 이후 모든 iteration의 입력이 같이 줄어서 절감 효과가 가장 크다.
+    output_config: { effort: "low" },
+    // thinking + 응답 텍스트를 합친 상한이다. 검색을 여러 번 돌면 사고가 예산을 다 먹고
+    // 정작 리서치 결과가 잘릴 수 있어 여유를 준다(실제 사용량이 늘어나는 건 아니다).
+    max_tokens: 4000,
+    // 검색 횟수 상한 — 검색비($10/1000회)보다 누적 컨텍스트를 막는 쪽이 본체다.
+    tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 4 }],
     messages: [
       {
         role: "user",
@@ -163,9 +175,12 @@ ${marketResearch}
 💡 판단: (2~3문장. 오늘 결과→오늘 밤 볼 것 연결)`;
 
   const response = await anthropic.messages.create({
-    model: "claude-opus-5",
+    // 새로 조사하지 않고 받은 데이터를 정해진 형식으로 옮기기만 하는 순수 서식 작업이라 Haiku로 충분하다.
+    // Haiku 4.5는 thinking을 생략하면 사고 없이 돈다 — 이 호출엔 그게 맞다.
+    // (Opus 5에서 thinking을 끄면 <thinking> 태그가 응답에 새어나오는 사례가 있는데, 그 위험도 같이 없어진다.)
+    // effort 파라미터는 Haiku 4.5에서 에러가 나므로 넣지 않는다.
+    model: "claude-haiku-4-5",
     max_tokens: 1500,
-    thinking: { type: "disabled" },
     messages: [
       {
         role: "user",

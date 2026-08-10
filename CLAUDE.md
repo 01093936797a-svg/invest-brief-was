@@ -29,9 +29,13 @@ Each brief also asks about trades in *the market that just closed* (morning → 
 **All dates are KST, via `lib/kst.ts`.** Never use `new Date().toISOString().slice(0,10)` for a user-facing date here — at 07:00 KST the UTC date is still the previous day, so that would print yesterday's date on every morning brief. `kstDate()` shifts by +9h first.
 
 - **`runAnalysis(kind)`** (`lib/pipeline.ts`) — reads `holdings` from Supabase, fetches live prices from free sources (Naver for `kr_stock`, Yahoo for `us_stock`/FX, Upbit for `crypto`), and calls Claude (`lib/claude.ts` → `researchMarket`) with the `web_search_20260209` server tool to get grounded, dated market facts for that half of the day. This is the "collect facts, don't fabricate" half — the Claude call here is instructed to mark anything uncertain as "확인 안 됨" rather than guess, and to put today's date in every search query (a stale-cached-article problem was observed in the predecessor system and is guarded against explicitly in the prompt).
-- **`runCompose()`** — takes that analysis JSON verbatim and calls Claude again (`composeBrief`) with a completely different instruction: write the Slack message for a specific audience (a 30-something dual-income newlywed couple, 규림·아연) and don't research anything new. Thinking is explicitly disabled on this call (`thinking: {type: "disabled"}`) since it's pure formatting with no tool use — safe here because the tool-call-leaks-as-text failure mode only applies when tools are declared on the same call, and this call declares none.
+- **`runCompose()`** — takes that analysis JSON verbatim and calls Claude again (`composeBrief`) with a completely different instruction: write the Slack message for a specific audience (a 30-something dual-income newlywed couple, 규림·아연) and don't research anything new. Pure formatting, no tool use, no thinking.
 
 **Why two separate Claude calls instead of one.** Same reason the predecessor's `brief.md` was split into "정보 수집가" / "메시지 작성가" phases: forcing a hard boundary between fact-gathering and writing measurably reduces the model blending unverified color commentary into what should be a grounded numbers section. Don't collapse these back into one call.
+
+**The two calls run on different models, deliberately** (as of 2026-08-11, after a ~$10-in-5-days bill). Cost here is dominated almost entirely by `researchMarket`: web search results accumulate in the conversation and the whole thing is re-sent on every iteration, so it's a huge-input / little-hard-reasoning workload. It runs on **`claude-sonnet-5`** at `effort: "low"` with `max_uses: 4` on the search tool — low effort cuts tool calls as well as thinking tokens, and each search avoided removes its results from every later iteration's input. `composeBrief` is pure formatting and runs on **`claude-haiku-4-5`**. Roughly $0.50 → $0.20 per run.
+
+**Always set `thinking` explicitly on any call added here.** The default differs by model — Opus 4.8 ran without thinking when the field was omitted; Opus 5 and Sonnet 5 run adaptive thinking. `researchMarket` omitted it and silently ran full adaptive thinking at the default `high` effort, which is most of what that bill was. Note the exception: Haiku 4.5 is an older model where omitting the field genuinely means no thinking, and where an `effort` parameter is an error — so `composeBrief` passes neither.
 
 ## Data model
 
@@ -52,19 +56,25 @@ curl -X POST https://invest-brief-was.vercel.app/api/morning-brief -H "Authoriza
 curl -X POST https://invest-brief-was.vercel.app/api/evening-brief -H "Authorization: Bearer $CRON_SECRET" --max-time 260
 ```
 
-**A full run takes ~2 minutes** (web search + two Claude calls), so always pass a generous `--max-time`; a 90s timeout will cut the client off while the function is still succeeding server-side. Note these actually post to Slack. To iterate on wording without sending, `GET /api/analyze?kind=morning` and then POST that JSON to `/api/compose` instead.
+**A full run takes 1–2 minutes** (web search + two Claude calls), so always pass a generous `--max-time`; a 90s timeout will cut the client off while the function is still succeeding server-side. The routes declare `export const maxDuration = 300` — don't remove it, the default cap is far below what a run needs and a timeout kills the process without `handleBrief`'s catch ever running, so the failure never reaches Slack.
+
+**Every manual test run costs real money** (~$0.20 — the web search half dominates). This is the main reason to iterate on wording via `GET /api/analyze?kind=morning` → POST that JSON to `/api/compose` instead of re-running the whole brief: it also avoids posting to Slack, but the bigger win is not paying for a fresh round of web searches on every wording tweak.
 
 **Watch out after deploying:** the production alias can keep serving the *previous* deployment for a few minutes even after the dashboard says Ready. If a change seems not to have taken effect, check the per-request "Deployment ID" in Vercel's logs before debugging the code.
+
+**Cron firings are not punctual.** On the Hobby plan Vercel triggers a cron anywhere within its scheduled hour, so the 07:00 brief can land any time before 08:00 (observed: 07:53 on the first real firing). This is plan behavior, not a bug — don't go debugging a late brief. Minute-accurate firing needs Pro.
+
+**A brief that never arrives leaves no Slack trace.** `handleBrief` reports failures by posting to Slack, so anything that stops it from reaching that code — cron never fired, 401 on the bearer check, timeout kill — is silent by construction. Start at Vercel logs and look for the `{kind}-brief 시작` line: present means the function ran (read on for the error), absent means the cron never reached it (check Settings → Cron Jobs for the last run and its status code).
 
 ## Secrets
 
 Set as Vercel project environment variables (`.env.example` lists all of them), never committed:
 
 - `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` — full read/write to `holdings`, server-only
-- `ANTHROPIC_API_KEY` — calls both Claude requests per run (`claude-opus-5`, no beta headers needed for `web_search_20260209` — it's GA)
+- `ANTHROPIC_API_KEY` — calls both Claude requests per run (`claude-sonnet-5` for research, `claude-haiku-4-5` for composition — see "two calls run on different models" above; no beta headers needed for `web_search_20260209`, it's GA)
 - `SLACK_WEBHOOK_URL` — send-only, one fixed channel
 - `DASHBOARD_URL` — optional, appended to the brief if set; points at the (separately, manually republished) visualization Artifact from the sibling project — this WAS does not generate or update that dashboard
-- `CRON_SECRET` — arbitrary string; Vercel echoes it as the cron request's bearer token, `api/daily-brief.ts` checks it if present
+- `CRON_SECRET` — arbitrary string; Vercel echoes it as the cron request's bearer token, `lib/run-brief.ts` checks it if present. **If it's unset the brief endpoints are public** — the check is `if (secret && ...)`, so an unset secret skips it entirely
 - `SLACK_BOT_TOKEN` / `SLACK_SIGNING_SECRET` — from the Slack App's OAuth install (Bot User OAuth Token) and Basic Information page. Used only by `api/slack-interact.ts`: the bot token calls `views.open` to show the asset-change modal, the signing secret verifies every incoming Interactivity request (HMAC over the raw body) before anything is trusted. The daily brief itself still goes out over the plain `SLACK_WEBHOOK_URL` — app-scoped incoming webhooks support Block Kit buttons, so a bot token isn't needed just to send messages.
 
 ## Slack-native asset updates (`api/slack-interact.ts`)

@@ -3,6 +3,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { handleBrief } from "../lib/run-brief.js";
 
+// maxDuration 근거는 morning-brief.ts 참고.
+export const maxDuration = 300;
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   return handleBrief(req, res, "evening");
 }

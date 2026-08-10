@@ -7,8 +7,15 @@ import { buildBriefBlocks } from "./slack-blocks.js";
 import type { BriefKind } from "./claude.js";
 
 export async function handleBrief(req: VercelRequest, res: VercelResponse, kind: BriefKind) {
+  // 진입 로그 — 아래 catch의 실패 알림은 슬랙으로 나가므로 "슬랙까지 못 간 실패"(크론 미발사,
+  // 401, 타임아웃 강제종료)는 어디에도 안 남는다. 이 한 줄이 "크론이 돌긴 했나"의 유일한 증거다.
+  const startedAt = Date.now();
+  console.log(`${kind}-brief 시작`);
+
   const secret = process.env.CRON_SECRET;
   if (secret && req.headers.authorization !== `Bearer ${secret}`) {
+    // 이 경로는 try 이전이라 아래 슬랙 알림을 타지 않는다 — 로그에라도 남겨야 조용히 사라지지 않는다.
+    console.warn(`${kind}-brief 401: Authorization 헤더 불일치`);
     return res.status(401).json({ error: "unauthorized" });
   }
 
@@ -16,6 +23,7 @@ export async function handleBrief(req: VercelRequest, res: VercelResponse, kind:
     const analysis = await runAnalysis(kind);
     const text = await runCompose(analysis);
     await sendSlackBlocks(buildBriefBlocks(text, kind), text);
+    console.log(`${kind}-brief 완료 (${Math.round((Date.now() - startedAt) / 1000)}초)`);
     return res.status(200).json({ ok: true, kind, sent: text.slice(0, 200) + "..." });
   } catch (err: any) {
     console.error(`${kind}-brief 실패:`, err);
