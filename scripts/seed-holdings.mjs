@@ -1,6 +1,9 @@
-// 로컬 asset-tracker의 assets.json을 Supabase holdings 테이블에 반영(전체 교체).
-// 매매해서 보유내역이 바뀔 때마다 이 스크립트를 다시 실행하면 됨(slack-invest-brief/sync-to-cloud.js와 같은 역할, DB버전).
-// 사용: node scripts/seed-holdings.mjs   (.env에 SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY 필요)
+// ⚠️ 더 이상 정기적으로 쓰지 않음 (2026-08-10) ⚠️
+// Supabase가 이제 유일한 원본이고 매매 기록은 Slack(있음/없음 버튼 → 모달)으로 직접 반영된다.
+// 이 스크립트는 Supabase를 asset-tracker의 로컬 JSON으로 "전체 교체"하므로,
+// 그 사이 Slack으로 기록한 매매 내역을 전부 지워버린다. 정말 필요한 경우(예: 대량 재정비)에만
+// --i-know-this-overwrites-slack-updates 플래그를 붙여 명시적으로 실행할 것.
+// 사용: node scripts/seed-holdings.mjs --i-know-this-overwrites-slack-updates
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -19,6 +22,13 @@ function readEnv() {
     if (m) env[m[1]] = m[2];
   }
   return env;
+}
+
+if (!process.argv.includes("--i-know-this-overwrites-slack-updates")) {
+  throw new Error(
+    "중단됨: 이 스크립트는 Supabase를 로컬 JSON으로 전체 교체해서 Slack으로 기록한 매매 내역을 지운다.\n" +
+      "정말 실행하려면 --i-know-this-overwrites-slack-updates 플래그를 붙일 것."
+  );
 }
 
 const env = readEnv();
