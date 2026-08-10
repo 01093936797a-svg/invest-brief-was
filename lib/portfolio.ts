@@ -1,6 +1,7 @@
 // 보유내역(Supabase) + 실시간 시세(네이버/야후/업비트)를 조합해 포트폴리오 평가액·전일대비 변동을 계산.
 // slack-invest-brief/refresh-prices.js 로직을 그대로 포팅 — 데이터 소스만 Supabase로 교체.
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { kstDate } from "./kst.js";
 
 export type Holding = {
   id: number;
@@ -158,7 +159,7 @@ export async function computePortfolio(holdings: Holding[]): Promise<PortfolioSu
     .map(([k, v]) => ({ category: k, value: v, pct: (v / total) * 100 }));
 
   return {
-    date: new Date().toISOString().slice(0, 10),
+    date: kstDate(),
     fx: fx.price,
     fxDayPct,
     total,

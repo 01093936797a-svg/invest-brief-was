@@ -11,16 +11,24 @@ A Vercel-hosted backend (WAS) that replaces the earlier Claude Code-based automa
 ## Architecture: two roles, one cron
 
 ```
-Vercel Cron (08:00 KST daily = 23:00 UTC)
-  → POST /api/daily-brief
-       → runAnalysis()   "역할 2: 자산 현황 정리 및 분석"
-       → runCompose()    "역할 1: 메시지 구성"
-       → sendSlack()
+Vercel Cron, twice per weekday (KST):
+  07:00 Mon–Fri  →  /api/morning-brief   (cron "0 22 * * 0-4" UTC)
+  19:00 Mon–Fri  →  /api/evening-brief   (cron "0 10 * * 1-5" UTC)
+       both → handleBrief(kind) → runAnalysis(kind) → runCompose() → sendSlackBlocks()
 ```
 
-`/api/analyze` and `/api/compose` are also exposed as standalone HTTP endpoints (independently POST-able, e.g. for manual testing) but `/api/daily-brief` doesn't call them over HTTP — it imports the same logic directly from `lib/pipeline.ts` to avoid an extra network hop within one Vercel invocation.
+**Why two briefs, and why at those hours.** Nearly all of the portfolio is *Korea-listed ETFs tracking US indices*, so it rides the US→Korea reflection lag. In August (US DST) the US session is 22:30–05:00 KST and the Korean session is 09:00–15:30 KST, which makes both slots fall in a clean gap:
 
-- **`runAnalysis()`** (`lib/pipeline.ts`) — reads `holdings` from Supabase, fetches live prices from the same free sources the sibling Electron app uses (Naver for `kr_stock`, Yahoo for `us_stock`/FX, Upbit for `crypto`), computes the TQQQ cash-rotation signal, and calls Claude (`lib/claude.ts` → `researchMarket`) with the `web_search_20260209` server tool to get grounded, dated market facts. This is the "collect facts, don't fabricate" half — the Claude call here is instructed to mark anything uncertain as "확인 안 됨" rather than guess, and to put today's date in every search query (a stale-cached-article problem was observed in the predecessor system and is guarded against explicitly in the prompt).
+- **07:00** — US close was 2h ago, Korean open is 2h away. The question is "how will last night's US session land on my ETFs today".
+- **19:00** — Korean close was 3.5h ago, US open is 3.5h away. The question is "how did today land, and what's on tonight's US calendar".
+
+Each brief also asks about trades in *the market that just closed* (morning → 간밤 미국장, evening → 오늘 국장), so the two Slack prompts cover both markets without overlapping.
+
+`BriefKind` (`"morning" | "evening"`, defined in `lib/claude.ts`) threads through the whole pipeline: it changes what `researchMarket` searches for, what `composeBrief`'s format block looks like, and which question the Slack buttons ask. `/api/analyze?kind=…` and `/api/compose` remain as standalone manual-testing endpoints; the cron routes don't call them over HTTP, they import `lib/pipeline.ts` directly to avoid a network hop inside one invocation.
+
+**All dates are KST, via `lib/kst.ts`.** Never use `new Date().toISOString().slice(0,10)` for a user-facing date here — at 07:00 KST the UTC date is still the previous day, so that would print yesterday's date on every morning brief. `kstDate()` shifts by +9h first.
+
+- **`runAnalysis(kind)`** (`lib/pipeline.ts`) — reads `holdings` from Supabase, fetches live prices from free sources (Naver for `kr_stock`, Yahoo for `us_stock`/FX, Upbit for `crypto`), and calls Claude (`lib/claude.ts` → `researchMarket`) with the `web_search_20260209` server tool to get grounded, dated market facts for that half of the day. This is the "collect facts, don't fabricate" half — the Claude call here is instructed to mark anything uncertain as "확인 안 됨" rather than guess, and to put today's date in every search query (a stale-cached-article problem was observed in the predecessor system and is guarded against explicitly in the prompt).
 - **`runCompose()`** — takes that analysis JSON verbatim and calls Claude again (`composeBrief`) with a completely different instruction: write the Slack message for a specific audience (a 30-something dual-income newlywed couple, 규림·아연) and don't research anything new. Thinking is explicitly disabled on this call (`thinking: {type: "disabled"}`) since it's pure formatting with no tool use — safe here because the tool-call-leaks-as-text failure mode only applies when tools are declared on the same call, and this call declares none.
 
 **Why two separate Claude calls instead of one.** Same reason the predecessor's `brief.md` was split into "정보 수집가" / "메시지 작성가" phases: forcing a hard boundary between fact-gathering and writing measurably reduces the model blending unverified color commentary into what should be a grounded numbers section. Don't collapse these back into one call.
@@ -29,13 +37,24 @@ Vercel Cron (08:00 KST daily = 23:00 UTC)
 
 Single Supabase table, `holdings` (`supabase/schema.sql`). Columns mirror the sibling project's `assets.json` shape (`name`, `category`, `market`, `ticker`, `quantity`, `buy_price`, `current_price`, `note`) with `category`/`market` constrained by CHECK. RLS is enabled with **no policies** — the table is reachable only via the service-role key from server code, never client-side.
 
-**Source of truth is still the local Electron app** (`~/Desktop/asset-tracker`), same as the sibling project. `scripts/seed-holdings.mjs` reads its `assets.json` and does a full delete+reinsert into Supabase — run it locally after every trade. There is no automatic sync between the Electron app and Supabase; this is a manual step by design (same tradeoff the sibling project made with `sync-to-cloud.js`).
+**Supabase is the sole source of truth** (as of 2026-08-10). Trades are recorded from Slack — the brief's 있음/없음 buttons open a modal that writes straight to `holdings`. The local Electron app (`~/Desktop/asset-tracker`) is no longer in this path at all; it's kept only as a personal viewer. Brand-new tickers aren't supported by the modal (it only lists existing holdings), so those are added by hand in the Supabase console — rare enough that this was a deliberate scope cut.
 
-The `holdings` row named exactly `"TQQQ 매매 대기현금"` is not a real brokerage account — it's the tactical cash reserve `lib/signal.ts` reads (matched by that literal name string) to compute "buy N more shares" / "selling half moves cash to X%" sizing on the TQQQ signal.
+`scripts/seed-holdings.mjs` still exists but is **deliberately hard to run**: it does a full delete+reinsert from the local `assets.json`, which would wipe anything Slack recorded since. It refuses to start without `--i-know-this-overwrites-slack-updates`.
+
+`lib/signal.ts` (the TQQQ cash-rotation signal) is **detached from the pipeline** — nothing imports it. The signal section was removed from the briefs on 2026-08-10; the file is kept because the logic is verified and may come back. Note this leaves the `holdings` row named `"TQQQ 매매 대기현금"` (a tactical cash reserve, not a real brokerage balance, and flagged 추정 in its `note`) counting as plain cash in the totals with nothing explaining what it's for.
 
 ## Running / testing locally
 
-No dev server config is set up yet — the fastest path to test a change is `vercel dev` (once a Vercel project exists and `vercel link` has been run) or `vercel deploy` to a preview URL and `curl` the preview's `/api/analyze` directly. `POST /api/daily-brief` requires an `Authorization: Bearer $CRON_SECRET` header once `CRON_SECRET` is set (Vercel injects that header automatically on the real cron firing) — a manual test needs to pass it explicitly with `curl`.
+There's no local dev server — testing means deploying and curling production. Both brief routes require `Authorization: Bearer $CRON_SECRET` (Vercel injects it on real cron firings; a manual test has to pass it explicitly):
+
+```
+curl -X POST https://invest-brief-was.vercel.app/api/morning-brief -H "Authorization: Bearer $CRON_SECRET" --max-time 260
+curl -X POST https://invest-brief-was.vercel.app/api/evening-brief -H "Authorization: Bearer $CRON_SECRET" --max-time 260
+```
+
+**A full run takes ~2 minutes** (web search + two Claude calls), so always pass a generous `--max-time`; a 90s timeout will cut the client off while the function is still succeeding server-side. Note these actually post to Slack. To iterate on wording without sending, `GET /api/analyze?kind=morning` and then POST that JSON to `/api/compose` instead.
+
+**Watch out after deploying:** the production alias can keep serving the *previous* deployment for a few minutes even after the dashboard says Ready. If a change seems not to have taken effect, check the per-request "Deployment ID" in Vercel's logs before debugging the code.
 
 ## Secrets
 

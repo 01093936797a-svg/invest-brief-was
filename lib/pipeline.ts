@@ -1,17 +1,16 @@
-// api/analyze, api/compose, api/daily-brief이 공유하는 핵심 로직.
+// api/morning-brief, api/evening-brief, api/analyze, api/compose가 공유하는 핵심 로직.
 import { getSupabase } from "./supabase.js";
 import { loadHoldings, computePortfolio, type PortfolioSummary } from "./portfolio.js";
-import { computeTqqqSignal, type TqqqSignal } from "./signal.js";
-import { researchMarket, composeBrief } from "./claude.js";
+import { researchMarket, composeBrief, type BriefKind } from "./claude.js";
 
-export type AnalysisResult = { portfolio: PortfolioSummary; signal: TqqqSignal; marketResearch: string };
+export type AnalysisResult = { portfolio: PortfolioSummary; marketResearch: string; kind: BriefKind };
 
-export async function runAnalysis(): Promise<AnalysisResult> {
+export async function runAnalysis(kind: BriefKind): Promise<AnalysisResult> {
   const supabase = getSupabase();
   const holdings = await loadHoldings(supabase);
-  const [portfolio, signal] = await Promise.all([computePortfolio(holdings), computeTqqqSignal(holdings)]);
-  const marketResearch = await researchMarket(holdings.map((h) => h.name));
-  return { portfolio, signal, marketResearch };
+  const portfolio = await computePortfolio(holdings);
+  const marketResearch = await researchMarket(holdings, kind);
+  return { portfolio, marketResearch, kind };
 }
 
 export async function runCompose(analysis: AnalysisResult): Promise<string> {

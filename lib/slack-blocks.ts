@@ -1,6 +1,7 @@
 // Block Kit JSON 빌더. block_id/action_id 상수를 여기 한 곳에서 export해서
 // 모달을 만드는 쪽과 view_submission을 읽는 쪽(api/slack-interact.ts)이 절대 따로 놀지 않게 한다.
 import type { Holding } from "./portfolio.js";
+import type { BriefKind } from "./claude.js";
 
 export const ACTION_ASSET_CHANGE_YES = "asset_change_yes";
 export const ACTION_ASSET_CHANGE_NO = "asset_change_no";
@@ -15,13 +16,16 @@ export const ACTION_QTY = "qty_input";
 export const BLOCK_PRICE = "price_block";
 export const ACTION_PRICE = "price_input";
 
-export function buildDailyBriefBlocks(text: string) {
+// 아침·저녁이 각각 직전에 마감한 시장을 묻는다 — 아침은 간밤 미국장, 저녁은 오늘 한국장.
+// 두 시장의 매매를 각자 가장 가까운 시점에 물어보게 되어 중복 입력이 생기지 않는다.
+export function buildBriefBlocks(text: string, kind: BriefKind) {
   // section 블록 text는 3000자 제한 — 방어적으로 자름(정상 브리핑은 항상 그보다 훨씬 짧음).
   const safeText = text.length > 2900 ? text.slice(0, 2900) + "…" : text;
+  const question = kind === "morning" ? "*간밤 미국장에서 매매하셨나요?*" : "*오늘 국장에서 매매하셨나요?*";
   return [
     { type: "section", text: { type: "mrkdwn", text: safeText } },
     { type: "divider" },
-    { type: "section", text: { type: "mrkdwn", text: "*어제 자산 변동 있었나요?*" } },
+    { type: "section", text: { type: "mrkdwn", text: question } },
     {
       type: "actions",
       block_id: "asset_change_actions",

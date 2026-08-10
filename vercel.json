@@ -1,8 +1,12 @@
 {
   "crons": [
     {
-      "path": "/api/daily-brief",
-      "schedule": "0 23 * * *"
+      "path": "/api/morning-brief",
+      "schedule": "0 22 * * 0-4"
+    },
+    {
+      "path": "/api/evening-brief",
+      "schedule": "0 10 * * 1-5"
     }
   ]
 }
