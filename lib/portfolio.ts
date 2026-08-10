@@ -35,11 +35,12 @@ async function fetchFx(): Promise<{ price: number | null; prev: number | null }>
   }
 }
 
-async function fetchQuote(
-  market: Holding["market"],
-  ticker: string | null,
-  fx: number | null
-): Promise<{ priceKrw: number; dayPct: number } | null> {
+// asOf = 이 시세가 '어느 거래일'의 것인지(YYYY-MM-DD). 시장마다 마감 시각이 달라서 한 번의 실행에도
+// 종목별로 기준일이 갈린다 — 예를 들어 월요일 저녁엔 국내 ETF는 당일 종가지만 미국 종목은 아직 지난
+// 금요일 종가다. 이걸 안 실어보내면 메시지가 전부 "오늘 등락"으로 뭉뚱그려 틀린 말을 하게 된다.
+type Quote = { priceKrw: number; dayPct: number; asOf: string | null };
+
+async function fetchQuote(market: Holding["market"], ticker: string | null, fx: number | null): Promise<Quote | null> {
   try {
     if (!ticker) return null;
     if (market === "kr_stock") {
@@ -50,18 +51,27 @@ async function fetchQuote(
       const nm: string = j.compareToPreviousPrice?.name || "";
       const dir = /FALL|LOWER/.test(nm) ? -1 : /EVEN/.test(nm) ? 0 : 1;
       const prev = close - dir * cmp;
-      return { priceKrw: close, dayPct: prev ? ((close - prev) / prev) * 100 : 0 };
+      // localTradedAt은 "2026-08-10T16:10:20+09:00" 형태(이미 KST)라 앞 10자가 곧 거래일.
+      const asOf = typeof j.localTradedAt === "string" ? j.localTradedAt.slice(0, 10) : null;
+      return { priceKrw: close, dayPct: prev ? ((close - prev) / prev) * 100 : 0, asOf };
     }
     if (market === "us_stock") {
       const r = await (
         await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=5d`, { headers: UA })
       ).json();
       const res = r?.chart?.result?.[0];
-      const closes: number[] = (res?.indicators?.quote?.[0]?.close || []).filter((x: unknown) => x != null);
-      const p = closes.at(-1) ?? res?.meta?.regularMarketPrice;
-      const prev = closes.at(-2) ?? res?.meta?.chartPreviousClose ?? p;
+      // 타임스탬프와 종가를 쌍으로 묶어 걸러야 마지막 종가가 '며칠자'인지 알 수 있다.
+      const ts: number[] = res?.timestamp || [];
+      const rawCloses: (number | null)[] = res?.indicators?.quote?.[0]?.close || [];
+      const pairs = ts
+        .map((t, i) => ({ t, c: rawCloses[i] }))
+        .filter((x): x is { t: number; c: number } => x.c != null);
+      const p = pairs.at(-1)?.c ?? res?.meta?.regularMarketPrice;
+      const prev = pairs.at(-2)?.c ?? res?.meta?.chartPreviousClose ?? p;
       if (!Number.isFinite(p) || !fx) return null;
-      return { priceKrw: p * fx, dayPct: prev ? ((p - prev) / prev) * 100 : 0 };
+      const lastTs = pairs.at(-1)?.t;
+      const asOf = lastTs != null ? new Date(lastTs * 1000).toISOString().slice(0, 10) : null;
+      return { priceKrw: p * fx, dayPct: prev ? ((p - prev) / prev) * 100 : 0, asOf };
     }
     if (market === "crypto") {
       const code = ticker.includes("-") ? ticker : `KRW-${ticker.toUpperCase()}`;
@@ -69,7 +79,10 @@ async function fetchQuote(
       const p = j?.trade_price;
       const prev = j?.prev_closing_price;
       if (!Number.isFinite(p)) return null;
-      return { priceKrw: p, dayPct: prev ? ((p - prev) / prev) * 100 : 0 };
+      // 코인은 24시간 거래라 항상 '지금' 기준. trade_date_kst는 "20260810" 형태.
+      const d: string | undefined = j?.trade_date_kst;
+      const asOf = d && d.length === 8 ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}` : kstDate();
+      return { priceKrw: p, dayPct: prev ? ((p - prev) / prev) * 100 : 0, asOf };
     }
     return null;
   } catch {
@@ -88,7 +101,7 @@ export type PortfolioSummary = {
   dayDiff: number;
   dayPct: number;
   byCategory: { category: string; value: number; pct: number }[];
-  movers: { name: string; account: string; dayPct: number; dayDiff: number }[];
+  movers: { name: string; account: string; dayPct: number; dayDiff: number; asOf: string | null }[];
   holdings: {
     name: string;
     account: string;
@@ -97,7 +110,10 @@ export type PortfolioSummary = {
     pct: number;
     dayPct: number;
     gainPct: number;
+    asOf: string | null;
   }[];
+  /** 시장별 시세 기준 거래일 — 메시지가 "오늘/어제"를 정확히 쓰게 하는 근거 */
+  asOfByMarket: { kr: string | null; us: string | null; crypto: string | null };
   staleCount: number;
 };
 
@@ -117,10 +133,12 @@ export async function computePortfolio(holdings: Holding[]): Promise<PortfolioSu
     name: string;
     category: string;
     account: string;
+    market: Holding["market"];
     value: number;
     dayPct: number;
     dayDiff: number;
     gainPct: number;
+    asOf: string | null;
   }[] = [];
 
   for (const a of holdings) {
@@ -139,10 +157,12 @@ export async function computePortfolio(holdings: Holding[]): Promise<PortfolioSu
       name: a.name,
       category: a.category,
       account: a.note || "",
+      market: a.market,
       value,
       dayPct,
       dayDiff: value - prevValue,
       gainPct: base ? ((value - base) / base) * 100 : 0,
+      asOf: q?.asOf ?? null,
     });
   }
   rows.sort((x, y) => y.value - x.value);
@@ -169,7 +189,9 @@ export async function computePortfolio(holdings: Holding[]): Promise<PortfolioSu
     dayDiff: total - prevTotal,
     dayPct: prevTotal ? ((total - prevTotal) / prevTotal) * 100 : 0,
     byCategory,
-    movers: movers.slice(0, 6).map((m) => ({ name: m.name, account: m.account, dayPct: m.dayPct, dayDiff: m.dayDiff })),
+    movers: movers
+      .slice(0, 6)
+      .map((m) => ({ name: m.name, account: m.account, dayPct: m.dayPct, dayDiff: m.dayDiff, asOf: m.asOf })),
     holdings: rows.map((r) => ({
       name: r.name,
       account: r.account,
@@ -178,7 +200,13 @@ export async function computePortfolio(holdings: Holding[]): Promise<PortfolioSu
       pct: (r.value / total) * 100,
       dayPct: r.dayPct,
       gainPct: r.gainPct,
+      asOf: r.asOf,
     })),
+    asOfByMarket: {
+      kr: rows.find((r) => r.market === "kr_stock" && r.asOf)?.asOf ?? null,
+      us: rows.find((r) => r.market === "us_stock" && r.asOf)?.asOf ?? null,
+      crypto: rows.find((r) => r.market === "crypto" && r.asOf)?.asOf ?? null,
+    },
     staleCount: stale,
   };
 }
