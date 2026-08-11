@@ -47,10 +47,12 @@ async function fetchQuote(market: Holding["market"], ticker: string | null, fx: 
       const j = await (await fetch(`https://m.stock.naver.com/api/stock/${ticker}/basic`, { headers: UA })).json();
       const close = num(j.closePrice);
       if (!Number.isFinite(close)) return null;
+      // compareToPreviousClosePrice는 이미 부호가 붙어 온다(하락이면 "-1,185"처럼 음수) — 실제
+      // 응답으로 확인함. 예전엔 여기에 compareToPreviousPrice.name을 정규식으로 파싱한 dir을
+      // 한 번 더 곱했는데, 하락일(dir=-1) 때 음수×음수로 부호가 다시 뒤집혀 하락을 상승으로
+      // 잘못 계산했다 — 상승/보합인 날은 dir이 +1/0이라 안 뒤집혀서 안 걸리고 하락일에만 터졌다.
       const cmp = num(j.compareToPreviousClosePrice) || 0;
-      const nm: string = j.compareToPreviousPrice?.name || "";
-      const dir = /FALL|LOWER/.test(nm) ? -1 : /EVEN/.test(nm) ? 0 : 1;
-      const prev = close - dir * cmp;
+      const prev = close - cmp;
       // localTradedAt은 "2026-08-10T16:10:20+09:00" 형태(이미 KST)라 앞 10자가 곧 거래일.
       const asOf = typeof j.localTradedAt === "string" ? j.localTradedAt.slice(0, 10) : null;
       return { priceKrw: close, dayPct: prev ? ((close - prev) / prev) * 100 : 0, asOf };
