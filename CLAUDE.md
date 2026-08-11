@@ -49,7 +49,9 @@ Single Supabase table, `holdings` (`supabase/schema.sql`). Columns mirror the si
 
 ## Running / testing locally
 
-There's no local dev server — testing means deploying and curling production. Both brief routes require `Authorization: Bearer $CRON_SECRET` (Vercel injects it on real cron firings; a manual test has to pass it explicitly):
+**`npm test`** (as of 2026-08-11) runs `lib/*.test.ts` via `node:test` + `tsx` — no network, no API cost, no Vercel deploy. This only covers pure logic: `lib/portfolio.ts`'s `computePortfolio` (with `global.fetch` mocked — the price-failure/cash-exclusion rules that have already had two real bugs) and `lib/kst.ts`'s date math (with `node:test`'s mock timers pinning the clock to the real 07:00 KST cron-firing instant, guarding the exact UTC-vs-KST bug described below). It does **not** cover anything that calls Claude or posts to Slack — there's no way to test that without spending money, which is why the rest of this section still applies.
+
+There's no local dev server for the HTTP routes — testing those means deploying and curling production. Both brief routes require `Authorization: Bearer $CRON_SECRET` (Vercel injects it on real cron firings; a manual test has to pass it explicitly):
 
 ```
 curl -X POST https://invest-brief-was.vercel.app/api/morning-brief -H "Authorization: Bearer $CRON_SECRET" --max-time 260

@@ -4,12 +4,17 @@
   "private": true,
   "type": "module",
   "description": "김규림·아연 가정 투자 브리핑 WAS — Supabase 보유내역 + Claude API 2단계(분석/작성) + Vercel Cron",
+  "scripts": {
+    "test": "tsx --test lib/**/*.test.ts"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
     "@supabase/supabase-js": "^2.45.4"
   },
   "devDependencies": {
+    "@types/node": "^22.20.1",
     "@vercel/node": "^3.2.24",
+    "tsx": "^4.23.12",
     "typescript": "^5.6.2"
   }
 }
