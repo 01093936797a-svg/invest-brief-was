@@ -115,6 +115,9 @@ export type PortfolioSummary = {
   /** 시장별 시세 기준 거래일 — 메시지가 "오늘/어제"를 정확히 쓰게 하는 근거 */
   asOfByMarket: { kr: string | null; us: string | null; crypto: string | null };
   staleCount: number;
+  /** 라이브 시세도 DB current_price 폴백도 없어 total/cost 집계에서 제외한 종목명.
+   *  비어있지 않으면 총 평가액이 그만큼 과소평가돼 있다는 뜻 — 0원으로 합산하지 않고 아예 뺐다. */
+  priceFailures: string[];
 };
 
 export async function loadHoldings(supabase: SupabaseClient): Promise<Holding[]> {
@@ -129,6 +132,7 @@ export async function computePortfolio(holdings: Holding[]): Promise<PortfolioSu
     prevTotal = 0,
     cost = 0,
     stale = 0;
+  const priceFailures: string[] = [];
   const rows: {
     name: string;
     category: string;
@@ -144,15 +148,24 @@ export async function computePortfolio(holdings: Holding[]): Promise<PortfolioSu
   for (const a of holdings) {
     await sleep(120);
     const q = await fetchQuote(a.market, a.ticker, fx.price);
+    if (!q && a.market !== "none") stale++;
+    // current_price 컬럼은 seed 스크립트 말고는 아무도 안 채운다 — 사실상 항상 null에 가깝다.
+    // live 조회도 실패하고 이것마저 없으면 가격을 전혀 모르는 상태인데, 그걸 0원으로 total에
+    // 합산하면 총액이 그만큼 조용히 과소평가된다(0을 더해도 에러가 안 나니 티가 안 남).
+    // 아예 집계에서 빼고 이름을 노출해서 "총액이 이 종목만큼 비어있다"가 보이게 한다.
+    const hasFallback = a.current_price != null && a.current_price > 0;
+    const priceFailed = !q && a.market !== "none" && !hasFallback;
+    if (priceFailed) priceFailures.push(a.name);
     const price = q ? q.priceKrw : a.current_price || 0;
     const dayPct = q ? q.dayPct : 0;
-    if (!q && a.market !== "none") stale++;
     const value = price * (a.quantity || 0);
     const prevValue = value / (1 + dayPct / 100);
     const base = (a.buy_price || 0) * (a.quantity || 0);
-    total += value;
-    prevTotal += prevValue;
-    cost += base;
+    if (!priceFailed) {
+      total += value;
+      prevTotal += prevValue;
+      cost += base;
+    }
     rows.push({
       name: a.name,
       category: a.category,
@@ -208,5 +221,6 @@ export async function computePortfolio(holdings: Holding[]): Promise<PortfolioSu
       crypto: rows.find((r) => r.market === "crypto" && r.asOf)?.asOf ?? null,
     },
     staleCount: stale,
+    priceFailures,
   };
 }

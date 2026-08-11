@@ -13,7 +13,13 @@ export async function handleBrief(req: VercelRequest, res: VercelResponse, kind:
   console.log(`${kind}-brief 시작`);
 
   const secret = process.env.CRON_SECRET;
-  if (secret && req.headers.authorization !== `Bearer ${secret}`) {
+  // secret이 비어 있으면 예전엔 인증을 통째로 건너뛰어 이 엔드포인트가 공개로 열렸다(추측 가능한
+  // 경로 + 요청 1회에 실비용 발생). 조용히 열려있는 것보다 시끄럽게 막히는 게 낫다 — fail-closed.
+  if (!secret) {
+    console.error(`${kind}-brief 500: CRON_SECRET 환경변수 미설정`);
+    return res.status(500).json({ error: "CRON_SECRET not configured" });
+  }
+  if (req.headers.authorization !== `Bearer ${secret}`) {
     // 이 경로는 try 이전이라 아래 슬랙 알림을 타지 않는다 — 로그에라도 남겨야 조용히 사라지지 않는다.
     console.warn(`${kind}-brief 401: Authorization 헤더 불일치`);
     return res.status(401).json({ error: "unauthorized" });

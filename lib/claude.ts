@@ -95,10 +95,15 @@ ${task}
     ],
   });
 
-  return response.content
+  const text = response.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
     .join("\n");
+
+  // 빈 응답을 그대로 흘려보내면 composeBrief가 "새 사실 없음" 취급하고 다음 호출이 빈 리서치로
+  // 메시지를 쓴다 — 여기서 막아야 run-brief.ts의 기존 실패 알림 경로(슬랙 ⚠️)를 탄다.
+  if (text.trim().length < 10) throw new Error(`researchMarket 빈 응답 (길이 ${text.trim().length})`);
+  return text;
 }
 
 export async function composeBrief(params: {
@@ -125,7 +130,7 @@ export async function composeBrief(params: {
 기준: ${priceBasis}
 날짜: ${portfolio.date}
 환율: ${portfolio.fx ? won(portfolio.fx) : "확인 안 됨"}원 (${portfolio.fxDayPct != null ? sgn(portfolio.fxDayPct) + portfolio.fxDayPct.toFixed(2) + "%" : "확인 안 됨"})
-총 평가액: ${won(portfolio.total)}원
+총 평가액: ${won(portfolio.total)}원${portfolio.priceFailures.length ? ` (⚠️ 가격 조회 실패로 미포함: ${portfolio.priceFailures.join(", ")} — 총액이 그만큼 낮게 잡혀 있음. 이 사실을 메시지에 한 줄로 짚어줘)` : ""}
 전일 대비: ${sgn(portfolio.dayDiff)}${won(portfolio.dayDiff)}원 (${sgn(portfolio.dayPct)}${portfolio.dayPct.toFixed(2)}%)
 평가손익(매입 대비): ${sgn(portfolio.gain)}${won(portfolio.gain)}원 (${portfolio.gainPct.toFixed(1)}%)
 자산배분: ${portfolio.byCategory.map((c) => `${c.category} ${c.pct.toFixed(1)}%`).join(", ")}
@@ -137,6 +142,7 @@ ${marketResearch}
 [확정 투자정책 — research-team이 이미 합의한 기준, 관련있을 때만 참고]
 위험성향: ${investmentPolicy.riskProfile} (목표배분 주식${investmentPolicy.targetAllocation.stock}·채권${investmentPolicy.targetAllocation.bond}·현금${investmentPolicy.targetAllocation.cash}·대체${investmentPolicy.targetAllocation.alt}%)
 ※ 채권·대체는 데이터가 별도 분류되지 않아 정밀 비교가 안 된다. 주식/현금 쏠림 정도만 참고하고, 이 제약 자체는 메시지에 쓰지 마라.
+현금 성격: ${investmentPolicy.cashPolicy} — "TQQQ 매매 대기현금"처럼 이름에서 용도가 안 드러나는 현금성 보유가 있으면, 비상금이 아니라 이 전략 현금이라는 걸 자연스럽게 짚어줘도 좋다(매번 강제로 언급할 필요는 없음).
 절세계좌: ${investmentPolicy.taxAccounts.note}
 변동성 방침: ${investmentPolicy.volatilityPolicy}
 `.trim();
@@ -210,9 +216,13 @@ ${factsBlock}`,
     ],
   });
 
-  return response.content
+  const text = response.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
     .join("\n")
     .trim();
+
+  // 빈/거의 빈 메시지를 그대로 슬랙에 올리는 것보다, 기존 실패 알림 경로(슬랙 ⚠️)를 타는 게 낫다.
+  if (text.length < 20) throw new Error(`composeBrief 빈 응답 (길이 ${text.length})`);
+  return text;
 }
