@@ -3,12 +3,16 @@
 // POST|GET /api/analyze?kind=morning|evening  → { portfolio, marketResearch, kind }
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { runAnalysis } from "../lib/pipeline.js";
+import { rejectUnauthorized } from "../lib/auth.js";
 import type { BriefKind } from "../lib/claude.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST" && req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
   }
+  // 수동 점검용이지만 실제로 Sonnet + web_search를 태우는 유료 호출이다 — run-brief.ts와
+  // 같은 CRON_SECRET 체크 없이는 경로를 아는 누구나 무제한으로 과금시킬 수 있었다.
+  if (rejectUnauthorized(req, res, "analyze")) return;
   const kind: BriefKind = req.query.kind === "evening" ? "evening" : "morning";
   try {
     const result = await runAnalysis(kind);

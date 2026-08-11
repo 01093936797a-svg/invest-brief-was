@@ -3,9 +3,13 @@
 // POST /api/compose  { portfolio, marketResearch, kind }  → { text }
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { runCompose } from "../lib/pipeline.js";
+import { rejectUnauthorized } from "../lib/auth.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  // analyze.ts만큼 비싸진 않지만(Haiku, 툴 없음) 임의 POST 본문을 그대로 프롬프트에 꽂는
+  // 완전 공개 엔드포인트였다 — 같은 체크로 통일한다.
+  if (rejectUnauthorized(req, res, "compose")) return;
   try {
     const { portfolio, marketResearch, kind } = req.body || {};
     if (!portfolio || !marketResearch) {

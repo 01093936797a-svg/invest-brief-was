@@ -50,6 +50,9 @@ export function buildBriefBlocks(text: string, kind: BriefKind) {
 
 export function buildHoldingsModal(holdings: Holding[]) {
   const tradable = holdings.filter((h) => h.category === "stock" || h.category === "crypto");
+  // static_select는 options가 비어있으면 Slack API가 그 자체로 거부한다 — 여기서 먼저
+  // 명확한 이유로 던져서 slack-interact.ts의 catch가 알아들을 수 있는 메시지를 보내게 한다.
+  if (tradable.length === 0) throw new Error("등록된 매매 가능 종목이 없습니다");
   return {
     type: "modal",
     callback_id: CALLBACK_ASSET_CHANGE_MODAL,

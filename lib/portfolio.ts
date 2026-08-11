@@ -153,8 +153,10 @@ export async function computePortfolio(holdings: Holding[]): Promise<PortfolioSu
     // live 조회도 실패하고 이것마저 없으면 가격을 전혀 모르는 상태인데, 그걸 0원으로 total에
     // 합산하면 총액이 그만큼 조용히 과소평가된다(0을 더해도 에러가 안 나니 티가 안 남).
     // 아예 집계에서 빼고 이름을 노출해서 "총액이 이 종목만큼 비어있다"가 보이게 한다.
+    // 현금(market="none")은 live 조회 대상이 아니라 애초에 current_price 하나에만 의존하므로
+    // 예외로 두면 안 된다 — 오히려 유일한 근거가 없을 때 조용히 0원 처리되는 걸 더 못 잡는다.
     const hasFallback = a.current_price != null && a.current_price > 0;
-    const priceFailed = !q && a.market !== "none" && !hasFallback;
+    const priceFailed = a.market === "none" ? !hasFallback : !q && !hasFallback;
     if (priceFailed) priceFailures.push(a.name);
     const price = q ? q.priceKrw : a.current_price || 0;
     const dayPct = q ? q.dayPct : 0;
