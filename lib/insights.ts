@@ -4,6 +4,7 @@
 // 매일 돈 주고 추론시킬 이유가 없고, 무엇보다 산수는 검색 한도에 걸리거나 환각하지 않는다.
 import type { PortfolioSummary } from "./portfolio.js";
 import type { MarketSnapshot } from "./market.js";
+import type { Snapshot } from "./snapshots.js";
 import { investmentPolicy } from "./policy.js";
 import { kstDate } from "./kst.js";
 
@@ -104,13 +105,66 @@ export function marketFetchWarning(market: MarketSnapshot): Insight | null {
   };
 }
 
+// --- 이력 기반 (portfolio_snapshots가 쌓여야 동작) ---
+//
+// 이력이 짧을 땐 전부 조용히 빠진다. 스냅샷 3개로 "전고점"을 말하는 건 거짓말에 가깝고,
+// 이 테이블은 2026-08-13에 막 생겨서 한동안은 데이터가 없다.
+
+/** 전고점 대비 낙폭. 신고점이면 그것대로 알린다 — 둘 다 사람이 궁금해하는 상태다. */
+export function drawdownFromPeak(portfolio: PortfolioSummary, history: Snapshot[]): Insight | null {
+  if (history.length < 5) return null;
+  const peak = Math.max(...history.map((h) => h.total));
+  if (!Number.isFinite(peak) || peak <= 0) return null;
+
+  if (portfolio.total >= peak) {
+    return { text: `총 평가액이 기록상 최고치를 넘었다(직전 최고 ${Math.round(peak).toLocaleString("ko-KR")}원).`, priority: 70 };
+  }
+  const dd = ((portfolio.total - peak) / peak) * 100;
+  if (dd > -3) return null; // 3% 이내는 노이즈, 매일 말할 거리가 아니다
+  return {
+    text: `전고점 ${Math.round(peak).toLocaleString("ko-KR")}원 대비 ${dd.toFixed(1)}%`,
+    priority: 75,
+  };
+}
+
+/** 이력에서 targetDays일 전에 가장 가까운 스냅샷. 정확히 그날이 없어도(주말·휴일) 근처를 쓴다. */
+function nearestBefore(history: Snapshot[], targetDays: number): Snapshot | null {
+  const targetMs = Date.parse(`${kstDate()}T00:00:00Z`) - targetDays * 86_400_000;
+  let best: Snapshot | null = null;
+  let bestGap = Infinity;
+  for (const h of history) {
+    const gap = Math.abs(Date.parse(`${h.date}T00:00:00Z`) - targetMs);
+    if (gap < bestGap) {
+      bestGap = gap;
+      best = h;
+    }
+  }
+  // 목표 시점에서 3일 넘게 떨어져 있으면 "1주일 수익률"이라 부를 수 없다.
+  return bestGap <= 3 * 86_400_000 ? best : null;
+}
+
+/** 주간 수익률. 하루 등락만 보면 안 보이는 추세를 짧게 얹는다. */
+export function weeklyReturn(portfolio: PortfolioSummary, history: Snapshot[]): Insight | null {
+  const past = nearestBefore(history, 7);
+  if (!past || past.total <= 0) return null;
+  const pct = ((portfolio.total - past.total) / past.total) * 100;
+  if (Math.abs(pct) < 1) return null; // 주간 1% 미만은 언급 가치가 낮다
+  return { text: `최근 1주일 ${sgn(pct)}${pct.toFixed(1)}% (${past.date} 대비)`, priority: 55 };
+}
+
 /** 전부 모아 우선순위 정렬. 빈 배열이면 "특이사항 없음"이 정직한 답이다. */
-export function buildInsights(portfolio: PortfolioSummary, market: MarketSnapshot): Insight[] {
+export function buildInsights(
+  portfolio: PortfolioSummary,
+  market: MarketSnapshot,
+  history: Snapshot[] = []
+): Insight[] {
   return [
     priceFailureWarning(portfolio),
     marketFetchWarning(market),
     reflectionGap(portfolio, market),
+    drawdownFromPeak(portfolio, history),
     fxMove(portfolio),
+    weeklyReturn(portfolio, history),
     ...bigMovers(portfolio),
     ...allocationDrift(portfolio),
   ]

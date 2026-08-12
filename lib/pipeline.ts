@@ -7,6 +7,7 @@ import { getSupabase } from "./supabase.js";
 import { loadHoldings, computePortfolio, type PortfolioSummary } from "./portfolio.js";
 import { fetchMarketSnapshot, formatMarketSnapshot, type MarketSnapshot } from "./market.js";
 import { buildInsights, formatInsights, type Insight } from "./insights.js";
+import { loadHistory, saveSnapshot } from "./snapshots.js";
 import { composeBrief, type BriefKind } from "./claude.js";
 
 export type AnalysisResult = {
@@ -22,10 +23,15 @@ export async function runAnalysis(kind: BriefKind): Promise<AnalysisResult> {
   const supabase = getSupabase();
   const holdings = await loadHoldings(supabase);
 
-  // 포트폴리오 시세와 시장 지수는 서로 의존하지 않으니 같이 던진다 — 실행 시간이 곧 타임아웃 여유다.
-  const [portfolio, market] = await Promise.all([computePortfolio(holdings), fetchMarketSnapshot()]);
+  // 셋 다 서로 의존하지 않으니 같이 던진다 — 실행 시간이 곧 타임아웃 여유다.
+  // loadHistory는 실패해도 빈 배열을 주므로(테이블 미생성 포함) 여기서 터지지 않는다.
+  const [portfolio, market, history] = await Promise.all([
+    computePortfolio(holdings),
+    fetchMarketSnapshot(),
+    loadHistory(supabase),
+  ]);
 
-  const insights = buildInsights(portfolio, market);
+  const insights = buildInsights(portfolio, market, history);
   const marketResearch = [
     "[시장 지수 — 무료 API 실측치, 이 숫자만 사용할 것]",
     formatMarketSnapshot(market),
@@ -47,4 +53,13 @@ export type ComposeInput = Pick<AnalysisResult, "portfolio" | "marketResearch" |
 export async function runCompose(analysis: ComposeInput): Promise<string> {
   const dashboardUrl = process.env.DASHBOARD_URL;
   return composeBrief({ ...analysis, dashboardUrl });
+}
+
+/**
+ * 오늘 값을 이력에 남긴다. 브리핑이 실제로 발송된 뒤에만 호출할 것 —
+ * /api/analyze 같은 수동 점검이 이력을 건드리지 않게 하려는 의도적 분리다.
+ * 실패해도 던지지 않으므로 호출부에서 await만 하면 된다.
+ */
+export async function recordSnapshot(portfolio: PortfolioSummary): Promise<void> {
+  await saveSnapshot(getSupabase(), portfolio);
 }

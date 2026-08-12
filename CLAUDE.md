@@ -17,8 +17,9 @@ Vercel Cron, twice per weekday (KST):
        both → handleBrief(kind) → runAnalysis(kind) → runCompose() → sendSlackBlocks()
 
 runAnalysis  = Supabase holdings + prices (Naver/Yahoo/Upbit) + indices (Yahoo)
-               + rule-based insights          ← no Claude, no network cost
-runCompose   = one Haiku call, no tools       ← the only LLM in the pipeline
+               + snapshot history + rule-based insights   ← no Claude
+runCompose   = one Haiku call, no tools                   ← the only LLM here
+(after send) = recordSnapshot() writes today's row, failures swallowed
 ```
 
 **Why two briefs, and why at those hours.** Nearly all of the portfolio is *Korea-listed ETFs tracking US indices*, so it rides the US→Korea reflection lag. In August (US DST) the US session is 22:30–05:00 KST and the Korean session is 09:00–15:30 KST, which makes both slots fall in a clean gap:
@@ -41,7 +42,11 @@ So the fetch moved to `lib/market.ts` (indices/futures, free, no cap, no halluci
 
 **What was deliberately given up:** the "why" behind a move. The old research call could read news and say a drop was about CPI or an earnings miss; the numbers-only pipeline cannot. `composeBrief`'s prompt therefore forbids guessing causes or inventing scheduled events, because a plausible-sounding fabricated reason is the worst failure this brief can have. If narrative is wanted back, add a *separate* free source (RSS headlines) rather than restoring the search tool.
 
-**`lib/insights.ts` is where new analysis belongs.** It already covers the reflection gap (overnight US move not yet in KR-listed ETF prices — the core thesis of this whole project, previously left for the model to notice), allocation drift vs `policy.ts` targets, FX moves, ±5% movers, and the two data-failure warnings. All pure functions over data already in hand, so they cost nothing per run and are testable without an API key. Prefer adding a rule here over adding words to the prompt.
+**`lib/snapshots.ts` gives the system a memory (as of 2026-08-13).** Before it, every run was stateless — the brief knew today's balance and nothing else, so "down from the peak" or "this week" were uncomputable at any price. `portfolio_snapshots` keeps one row per KST date (`date` is the PK, so the evening brief upserts over the morning one and the settled KR close wins). Two rules protect the series: a run with any `priceFailures` is **not** recorded, because a wrong total baked into history would poison every future peak/drawdown calculation; and both read and write **swallow their errors** — the table not existing yet, or Supabase being down, degrades the brief to "no history insights" instead of failing it. `loadHistory` also excludes today, or today's row would become its own peak. The write happens in `handleBrief` *after* Slack send succeeds, deliberately not in `runAnalysis`, so `/api/analyze` stays read-only and manual testing never writes history.
+
+⚠️ **The table has to be created by hand** — run the `portfolio_snapshots` block in `supabase/schema.sql` in the Supabase SQL Editor. Until then everything works, just with the history-based insights silently absent (look for `스냅샷 조회 실패` in the logs).
+
+**`lib/insights.ts` is where new analysis belongs.** It already covers the reflection gap (overnight US move not yet in KR-listed ETF prices — the core thesis of this whole project, previously left for the model to notice), allocation drift vs `policy.ts` targets, FX moves, ±5% movers, drawdown from peak and weekly return (both history-backed), and the two data-failure warnings. Every rule has a threshold below which it stays silent, and the history-backed ones return nothing until there's enough data — a brief that says less on a quiet day is correct behavior, not a bug. All pure functions over data already in hand, so they cost nothing per run and are testable without an API key. Prefer adding a rule here over adding words to the prompt.
 
 **Always set `thinking` explicitly on any Claude call added here.** The default differs by model — Opus 4.8 ran without thinking when the field was omitted; Opus 5 and Sonnet 5 run adaptive thinking. The old `researchMarket` omitted it and silently ran full adaptive thinking at the default `high` effort, which was most of a ~$10-in-5-days bill. Note the exception: Haiku 4.5 is an older model where omitting the field genuinely means no thinking, and where an `effort` parameter is an error — so `composeBrief` passes neither.
 

@@ -1,7 +1,7 @@
 // api/morning-brief.ts와 api/evening-brief.ts가 공유하는 엔드포인트 로직.
 // Vercel Cron은 경로 단위로만 스케줄을 걸 수 있어서 라우트 파일은 둘로 나누되, 내용은 여기 한 곳에 둔다.
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { runAnalysis, runCompose } from "./pipeline.js";
+import { runAnalysis, runCompose, recordSnapshot } from "./pipeline.js";
 import { sendSlack, sendSlackBlocks } from "./slack.js";
 import { buildBriefBlocks } from "./slack-blocks.js";
 import { rejectUnauthorized } from "./auth.js";
@@ -20,6 +20,8 @@ export async function handleBrief(req: VercelRequest, res: VercelResponse, kind:
     const analysis = await runAnalysis(kind);
     const text = await runCompose(analysis);
     await sendSlackBlocks(buildBriefBlocks(text, kind), text);
+    // 발송에 성공한 뒤에만 이력을 남긴다 — 저장 실패는 안에서 삼켜지므로 브리핑에 영향이 없다.
+    await recordSnapshot(analysis.portfolio);
     console.log(`${kind}-brief 완료 (${Math.round((Date.now() - startedAt) / 1000)}초)`);
     return res.status(200).json({ ok: true, kind, sent: text.slice(0, 200) + "..." });
   } catch (err: any) {
