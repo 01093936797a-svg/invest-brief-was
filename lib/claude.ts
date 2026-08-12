@@ -1,6 +1,11 @@
-// Claude API 호출 2종 — 역할별로 분리(정확성 vs 가독성).
-// 1) researchMarket: web_search 서버도구로 시장을 조사해 사실 위주 텍스트로 반환 (정보 수집가 역할).
-// 2) composeBrief: 그 결과+포트폴리오 데이터를 받아 30대 신혼부부용 슬랙 메시지를 작성 (메시지 작성가 역할).
+// Claude API 호출 1종 — 메시지 작성만 담당한다.
+//
+// 원래는 여기 researchMarket이 있어서 web_search 서버도구로 시장을 조사했다. 2026-08-13에
+// 걷어냈다: 검색으로 찾던 게 대부분 코스피 종가·선물 방향·환율 같은 **숫자**였고, 그건 무료
+// 정형 API로 받으면 되는 데이터였다. LLM을 스크레이퍼로 쓰느라 회당 비용의 97%를 썼고,
+// 2026-08-12에는 검색 한도에 걸려 시장 섹션이 통째로 "확인 불가"가 된 채 성공으로 발송됐다.
+// 이제 lib/market.ts가 숫자를 받고 lib/insights.ts가 해석 가능한 부분을 먼저 계산하며,
+// Claude는 그 결과를 읽기 좋게 쓰는 일만 한다 — 도구가 없으니 한도도, 환각할 여지도 없다.
 //
 // 하루 2회, 서로 다른 시점에 서로 다른 질문에 답한다 (BriefKind):
 //   morning (07:00 KST) — 간밤 미국장이 끝나고 오늘 국장이 열리기 전. "미장 결과가 오늘 내 ETF에 어떻게 들어올까"
@@ -8,9 +13,8 @@
 // 이 구조가 성립하는 이유는 보유자산 대부분이 '국내상장 미국지수 ETF'라 미장→국장 반영 시차를 그대로 타기 때문이다.
 import Anthropic from "@anthropic-ai/sdk";
 import type { PortfolioSummary } from "./portfolio.js";
-import type { Holding } from "./portfolio.js";
 import { investmentPolicy } from "./policy.js";
-import { kstDate, kstWeekdayKo, isKstMonday } from "./kst.js";
+import { kstDate, kstWeekdayKo } from "./kst.js";
 
 export type BriefKind = "morning" | "evening";
 
@@ -18,125 +22,6 @@ function client() {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY 환경변수 없음");
   return new Anthropic({ apiKey });
-}
-
-/**
- * 응답 블록에서 웹서치 실패 코드(max_uses_exceeded 등)를 중복 없이 뽑는다.
- * 성공한 검색의 content는 결과 배열이고, 실패하면 error_code를 가진 객체가 온다 — 그 차이로 가른다.
- * SDK 타입이 이 union을 정확히 좁혀주지 않아 좁은 범위에서만 구조적으로 접근한다.
- */
-export function webSearchErrorCodes(content: readonly { type: string }[]): string[] {
-  const codes = content
-    .filter((b) => b.type === "web_search_tool_result")
-    .map((b) => (b as { content?: { error_code?: unknown } }).content?.error_code)
-    .filter((c): c is string => typeof c === "string");
-  return [...new Set(codes)];
-}
-
-function holdingsByMarket(holdings: Holding[]) {
-  const uniq = (xs: string[]) => [...new Set(xs)];
-  return {
-    kr: uniq(holdings.filter((h) => h.market === "kr_stock").map((h) => h.name)),
-    us: uniq(holdings.filter((h) => h.market === "us_stock").map((h) => h.name)),
-    crypto: uniq(holdings.filter((h) => h.market === "crypto").map((h) => h.name)),
-  };
-}
-
-export async function researchMarket(holdings: Holding[], kind: BriefKind): Promise<string> {
-  const anthropic = client();
-  const { kr, us, crypto } = holdingsByMarket(holdings);
-
-  const holdingsBlock = `
-국내상장 ETF(대부분 미국지수 추종 — 미국장 결과가 다음 한국장에 반영됨): ${kr.join(", ") || "없음"}
-미국 직접상장: ${us.join(", ") || "없음"}
-코인: ${crypto.join(", ") || "없음"}`.trim();
-
-  const mondayNote = isKstMonday()
-    ? "\n※ 오늘은 월요일이라 '간밤'에 해당하는 미국장이 없다. 직전 미국 거래일은 지난 금요일이므로 그 마감 기준으로 조사하고, 그 사실을 명시해라."
-    : "";
-
-  const task =
-    kind === "morning"
-      ? `지금은 한국시간 오전 7시경이다. 간밤 미국장은 이미 마감했고(한국시간 새벽 5시), 오늘 한국장은 아직 열리지 않았다(9시 개장).${mondayNote}
-
-확인할 것:
-- 간밤 미국장 마감: S&P500·나스닥 종가와 등락률, 그렇게 움직인 이유(지표/실적/연준 등)
-- 위 국내상장 ETF들이 추종하는 지수·섹터가 간밤에 어떻게 움직였는지 (오늘 한국장 개장가에 반영될 부분)
-- USD/KRW 현재 환율 방향
-- 오늘 한국장 개장 전 참고사항이 있으면(아시아 증시 동향, 미국 선물 등) 한 줄
-- 미국 직접상장 보유분에 큰 개별 이슈가 있으면 한 줄
-- 코인은 큰 변동 있을 때만 한 줄`
-      : `지금은 한국시간 저녁 7시경이다. 오늘 한국장은 이미 마감했고(15:30), 오늘 밤 미국장은 아직 열리지 않았다(한국시간 22:30 개장).
-
-확인할 것:
-- 오늘 한국장 마감: KOSPI 등락, 그리고 위 국내상장 ETF들이 오늘 어떻게 마감했는지(개별 수치 확인 안 되면 추종 지수/섹터 기준으로)
-- 오늘 밤 미국장 예정 이벤트: 경제지표 발표(시각 포함), 주요 실적발표, 연준 인사 발언 등. 없으면 "예정된 주요 일정 없음"이라고 명시
-- 미국 주가지수 선물 현재 방향
-- USD/KRW 오늘 마감 수준
-- 코인은 큰 변동 있을 때만 한 줄`;
-
-  const response = await anthropic.messages.create({
-    // 이 호출은 "검색해서 사실을 뽑아오는" 작업 — 입력 토큰이 압도적으로 많고 어려운 추론은 없다.
-    // 웹서치 결과가 대화에 누적되고 매 iteration마다 전체를 다시 보내기 때문에 비용의 대부분이 여기서 나온다.
-    // 그래서 입력 단가가 싼 Sonnet으로 내리고, effort를 낮춰 검색 횟수 자체를 줄인다.
-    model: "claude-sonnet-5",
-    // thinking은 항상 명시한다 — 모델마다 "생략 시 기본값"이 다르다(Opus 4.8은 꺼짐, Opus 5·Sonnet 5는 켜짐).
-    // 생략에 기대면 모델을 바꿀 때 사고 비용이 조용히 붙는다. 실제로 그래서 요금이 샜다.
-    thinking: { type: "adaptive" },
-    // effort가 낮으면 사고 토큰만 주는 게 아니라 툴 호출도 더 적고 통합적으로 나간다 —
-    // 검색 1회가 줄면 이후 모든 iteration의 입력이 같이 줄어서 절감 효과가 가장 크다.
-    output_config: { effort: "low" },
-    // thinking + 응답 텍스트를 합친 상한이다. 검색을 여러 번 돌면 사고가 예산을 다 먹고
-    // 정작 리서치 결과가 잘릴 수 있어 여유를 준다(실제 사용량이 늘어나는 건 아니다).
-    max_tokens: 4000,
-    // 검색 횟수 상한 — 검색비($10/1000회)보다 누적 컨텍스트를 막는 쪽이 본체다.
-    // 처음엔 4로 잡았다가 2026-08-12 저녁 브리핑이 상한을 다 쓰고 "확인 불가"만 채워 나갔다.
-    // task가 요구하는 주제가 국장/미장일정/선물/환율/코인 최소 5개라 4는 애초에 모자랐다.
-    // 이 숫자를 줄일 땐 아래 task의 항목 수와 같이 보고 줄여야 한다.
-    tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 8 }],
-    messages: [
-      {
-        role: "user",
-        content: `너는 지금 "정보 수집가" 역할이다. 정확성이 최우선 — 확인된 사실만 쓰고, 불확실하면 "확인 안 됨"이라 명시해라. 그럴듯하게 지어내지 마라.
-
-오늘(${kstDate()}, 한국시간 기준) 날짜를 검색어에 명시적으로 포함해서 조사해라. 날짜 없이 검색하면 며칠 지난 캐시 기사가 섞여 들어온다. 기사의 실제 발행일시를 확인하고 해당 시점 기준이 아니면 쓰지 마라.
-
-검색 횟수에 상한이 있으니 한 번의 검색으로 여러 항목을 함께 건지도록 검색어를 넓게 잡아라 — 예를 들어 종목마다 따로 찾지 말고 "${kstDate()} 코스피 마감 나스닥 선물 환율"처럼 한 번에 묶어서 검색하고, 결과에서 필요한 항목들을 나눠 담아라. 아래 확인할 것 중 앞쪽 항목이 더 중요하니 검색이 부족해지면 뒤쪽(코인 등)을 포기해라.
-
-내 실제 보유자산 (아래 목록에 없는 종목을 임의로 언급하지 마라):
-${holdingsBlock}
-
-${task}
-
-결과를 5~8줄 정도의 간결한 사실 나열로 출력해라. 문장 다듬기나 톤은 신경쓰지 말고 사실만.`,
-      },
-    ],
-  });
-
-  const text = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n");
-
-  // 빈 응답을 그대로 흘려보내면 composeBrief가 "새 사실 없음" 취급하고 다음 호출이 빈 리서치로
-  // 메시지를 쓴다 — 여기서 막아야 run-brief.ts의 기존 실패 알림 경로(슬랙 ⚠️)를 탄다.
-  if (text.trim().length < 10) throw new Error(`researchMarket 빈 응답 (길이 ${text.trim().length})`);
-
-  // 웹서치가 한도 초과(max_uses_exceeded) 등으로 실패하면 모델은 그 사실을 삼키고 "확인 불가"로
-  // 채운 멀쩡한 형식의 응답을 낸다 — 빈 응답 가드에도 안 걸리고 브리핑은 성공 처리되어 조용히 나간다.
-  // 2026-08-12 저녁 브리핑이 정확히 그렇게 나갔고, 읽는 사람은 "오늘 뉴스가 없었나 보다"로 읽게 된다.
-  // 시장이 조용했던 것과 조사를 못 한 것은 완전히 다른 얘기라, 그 구분을 아래로 명시해서 넘긴다.
-  const searchErrors = webSearchErrorCodes(response.content);
-  if (searchErrors.length) {
-    console.error(`researchMarket 웹서치 실패: ${searchErrors.join(", ")} — 시장 섹션이 불완전한 채로 나간다`);
-    return `[⚠️ 시스템 경고 — 반드시 메시지에 반영할 것]
-웹 검색 도구가 실패했다(${searchErrors.join(", ")}). 아래 시장 정보는 조사가 완료되지 않은 상태다.
-이건 "오늘 시장에 특별한 뉴스가 없었다"는 뜻이 절대 아니라 "시스템이 조사 자체를 못 했다"는 뜻이다.
-시장 섹션에 "확인 안 됨" 같은 평범한 표현으로 뭉개지 말고, 조사 실패 때문에 시장 정보를 못 싣는다는 걸 한 줄로 분명히 밝혀라.
-
-${text}`;
-  }
-  return text;
 }
 
 export async function composeBrief(params: {
@@ -169,7 +54,6 @@ export async function composeBrief(params: {
 자산배분: ${portfolio.byCategory.map((c) => `${c.category} ${c.pct.toFixed(1)}%`).join(", ")}
 등락 큰 종목: ${portfolio.movers.slice(0, 3).map((m) => `${m.name}(${m.account}) ${sgn(m.dayPct)}${m.dayPct.toFixed(2)}% [${rel(m.asOf)} 기준]`).join(", ") || "없음"}
 
-[시장 리서치 — 정보수집가가 확인한 사실]
 ${marketResearch}
 
 [확정 투자정책 — research-team이 이미 합의한 기준, 관련있을 때만 참고]
@@ -186,7 +70,7 @@ ${marketResearch}
 ▸ 한 줄 요약: (간밤 미장이 오늘 내 ETF에 어떻게 들어올지 한 문장)
 
 ■ 간밤 미국장 → 오늘 국장
-- (미장 마감 결과와 그게 오늘 내 국내상장 ETF에 어떤 방향으로 반영될지를 묶어서. 최대 3줄)
+- (미장 지수 마감 수치와, 그게 오늘 내 국내상장 ETF 개장가에 어떤 방향으로 들어올지. 최대 3줄. 움직인 '이유'는 데이터에 없으니 쓰지 마라)
 - (환율이 의미 있게 움직였으면 한 줄)
 
 ■ 내 자산
@@ -209,7 +93,7 @@ ${marketResearch}
 - 움직인 종목: 종목명(계좌) ±…% — 최대 3개, 미미하면 "큰 움직임 없음". 기준일이 오늘이 아닌 종목만 "(8/7 미국장 기준)"처럼 덧붙인다
 
 ■ 오늘 밤 미국장
-- (예정된 지표·실적·이벤트를 시각과 함께. 최대 3줄. 없으면 "예정된 주요 일정 없음")
+- (선물 방향 수치가 있으면 그것만 한 줄. 예정 일정은 데이터에 없으니 쓰지 마라)
 
 💡 판단: (2~3문장. 오늘 결과→오늘 밤 볼 것 연결)`;
 
@@ -232,6 +116,9 @@ ${marketResearch}
 - 절세계좌 비중이 크다는 건 이미 잘하고 있는 것 — 걱정거리처럼 쓰지 않는다.
 - life-stage 프레임(내집마련 자금 타임라인, 리스크 한도 등)은 그날 실제로 관련 있을 때만 살짝 얹는다. 매일 억지로 끼워넣지 않는다.
 - 시장 이야기는 **내 보유종목에 실제로 연결되는 것만** 쓴다. 지수가 움직였어도 내 자산과 연결이 안 되면 뺀다. 일반 뉴스 요약지가 아니다.
+- **아래 데이터에는 지수·환율 같은 수치만 있고 뉴스가 없다.** 그래서 "왜 움직였는지"(연준·CPI·실적 등)는 알 수 없다 — 절대 추측해서 쓰지 마라. 이유를 모르면 이유를 빼고 움직임만 쓰면 된다. 그럴듯한 원인을 붙이는 게 이 브리핑에서 제일 위험한 실수다.
+- 마찬가지로 데이터에 없는 예정 일정(오늘 밤 지표 발표 등)도 지어내지 마라. 해당 섹션은 "예정 일정 정보 없음"으로 두거나, 쓸 내용이 없으면 섹션을 통째로 줄여라.
+- [규칙 기반 인사이트] 항목들은 이미 계산이 끝난 사실이다. 숫자를 다시 계산하거나 다르게 해석하지 말고, 필요한 것만 골라 자연스러운 문장으로 풀어 써라.
 - 한 줄 요약에 이미 쓴 숫자·표현은 아래 섹션에서 반복하지 않는다.
 - **종목마다 시세 기준일이 다르다.** 각 종목 뒤 [YYYY-MM-DD 기준] 표기를 반드시 확인하고, "(오늘)"이라 적힌 것만 오늘 등락으로 써라. 기준일이 오늘이 아닌 종목은 "TQQQ +3.4%(8/7 미국장 기준)"처럼 언제 것인지 함께 밝힌다. 기준일이 서로 다른 종목들을 "오늘 움직인 종목"으로 뭉뚱그리면 틀린 메시지가 된다.
 - 위 기준일 표기는 근거 데이터일 뿐이니, 굳이 언급할 필요 없는 종목까지 날짜를 다 붙여 지저분하게 만들지는 마라. 오늘 것이 아닐 때만 밝히면 된다.

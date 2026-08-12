@@ -10,8 +10,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST" && req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
   }
-  // 수동 점검용이지만 실제로 Sonnet + web_search를 태우는 유료 호출이다 — run-brief.ts와
-  // 같은 CRON_SECRET 체크 없이는 경로를 아는 누구나 무제한으로 과금시킬 수 있었다.
+  // 웹서치를 걷어낸 뒤로는 Claude를 안 태우지만(무료 API + 로컬 계산), 보유내역 전체를
+  // 그대로 뱉는 엔드포인트라 인증은 그대로 둔다 — 비용이 아니라 자산 정보 노출 문제다.
   if (rejectUnauthorized(req, res, "analyze")) return;
   const kind: BriefKind = req.query.kind === "evening" ? "evening" : "morning";
   try {
