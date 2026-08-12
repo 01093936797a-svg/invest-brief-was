@@ -77,6 +77,8 @@ curl -X POST https://invest-brief-was.vercel.app/api/evening-brief -H "Authoriza
 
 **Watch out after deploying:** the production alias can keep serving the *previous* deployment for a few minutes even after the dashboard says Ready. If a change seems not to have taken effect, check the per-request "Deployment ID" in Vercel's logs before debugging the code.
 
+**Don't deploy inside a cron's firing window.** Vercel re-registers cron jobs per deployment, so pushing while a cron is due can lose that firing outright — and on Hobby the window is a full hour, not a minute. The windows are **22:00–23:00 UTC** (morning brief) and **10:00–11:00 UTC** (evening brief). On 2026-08-13 the morning brief never arrived after three deploys landed at 22:14/22:41/22:50 UTC, one of them a full architecture replacement. If you must ship during a window, verify with a manual `curl` afterward rather than assuming the next firing will cover it.
+
 **Cron firings are not punctual.** On the Hobby plan Vercel triggers a cron anywhere within its scheduled hour, so the 07:00 brief can land any time before 08:00 (observed: 07:53 on the first real firing). This is plan behavior, not a bug — don't go debugging a late brief. Minute-accurate firing needs Pro.
 
 **A brief that never arrives leaves no Slack trace.** `handleBrief` reports failures by posting to Slack, so anything that stops it from reaching that code — cron never fired, 401 on the bearer check, timeout kill — is silent by construction. Start at Vercel logs and look for the `{kind}-brief 시작` line: present means the function ran (read on for the error), absent means the cron never reached it (check Settings → Cron Jobs for the last run and its status code).
