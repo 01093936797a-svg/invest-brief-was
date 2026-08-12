@@ -20,6 +20,19 @@ function client() {
   return new Anthropic({ apiKey });
 }
 
+/**
+ * 응답 블록에서 웹서치 실패 코드(max_uses_exceeded 등)를 중복 없이 뽑는다.
+ * 성공한 검색의 content는 결과 배열이고, 실패하면 error_code를 가진 객체가 온다 — 그 차이로 가른다.
+ * SDK 타입이 이 union을 정확히 좁혀주지 않아 좁은 범위에서만 구조적으로 접근한다.
+ */
+export function webSearchErrorCodes(content: readonly { type: string }[]): string[] {
+  const codes = content
+    .filter((b) => b.type === "web_search_tool_result")
+    .map((b) => (b as { content?: { error_code?: unknown } }).content?.error_code)
+    .filter((c): c is string => typeof c === "string");
+  return [...new Set(codes)];
+}
+
 function holdingsByMarket(holdings: Holding[]) {
   const uniq = (xs: string[]) => [...new Set(xs)];
   return {
@@ -77,13 +90,18 @@ export async function researchMarket(holdings: Holding[], kind: BriefKind): Prom
     // 정작 리서치 결과가 잘릴 수 있어 여유를 준다(실제 사용량이 늘어나는 건 아니다).
     max_tokens: 4000,
     // 검색 횟수 상한 — 검색비($10/1000회)보다 누적 컨텍스트를 막는 쪽이 본체다.
-    tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 4 }],
+    // 처음엔 4로 잡았다가 2026-08-12 저녁 브리핑이 상한을 다 쓰고 "확인 불가"만 채워 나갔다.
+    // task가 요구하는 주제가 국장/미장일정/선물/환율/코인 최소 5개라 4는 애초에 모자랐다.
+    // 이 숫자를 줄일 땐 아래 task의 항목 수와 같이 보고 줄여야 한다.
+    tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 8 }],
     messages: [
       {
         role: "user",
         content: `너는 지금 "정보 수집가" 역할이다. 정확성이 최우선 — 확인된 사실만 쓰고, 불확실하면 "확인 안 됨"이라 명시해라. 그럴듯하게 지어내지 마라.
 
 오늘(${kstDate()}, 한국시간 기준) 날짜를 검색어에 명시적으로 포함해서 조사해라. 날짜 없이 검색하면 며칠 지난 캐시 기사가 섞여 들어온다. 기사의 실제 발행일시를 확인하고 해당 시점 기준이 아니면 쓰지 마라.
+
+검색 횟수에 상한이 있으니 한 번의 검색으로 여러 항목을 함께 건지도록 검색어를 넓게 잡아라 — 예를 들어 종목마다 따로 찾지 말고 "${kstDate()} 코스피 마감 나스닥 선물 환율"처럼 한 번에 묶어서 검색하고, 결과에서 필요한 항목들을 나눠 담아라. 아래 확인할 것 중 앞쪽 항목이 더 중요하니 검색이 부족해지면 뒤쪽(코인 등)을 포기해라.
 
 내 실제 보유자산 (아래 목록에 없는 종목을 임의로 언급하지 마라):
 ${holdingsBlock}
@@ -103,6 +121,21 @@ ${task}
   // 빈 응답을 그대로 흘려보내면 composeBrief가 "새 사실 없음" 취급하고 다음 호출이 빈 리서치로
   // 메시지를 쓴다 — 여기서 막아야 run-brief.ts의 기존 실패 알림 경로(슬랙 ⚠️)를 탄다.
   if (text.trim().length < 10) throw new Error(`researchMarket 빈 응답 (길이 ${text.trim().length})`);
+
+  // 웹서치가 한도 초과(max_uses_exceeded) 등으로 실패하면 모델은 그 사실을 삼키고 "확인 불가"로
+  // 채운 멀쩡한 형식의 응답을 낸다 — 빈 응답 가드에도 안 걸리고 브리핑은 성공 처리되어 조용히 나간다.
+  // 2026-08-12 저녁 브리핑이 정확히 그렇게 나갔고, 읽는 사람은 "오늘 뉴스가 없었나 보다"로 읽게 된다.
+  // 시장이 조용했던 것과 조사를 못 한 것은 완전히 다른 얘기라, 그 구분을 아래로 명시해서 넘긴다.
+  const searchErrors = webSearchErrorCodes(response.content);
+  if (searchErrors.length) {
+    console.error(`researchMarket 웹서치 실패: ${searchErrors.join(", ")} — 시장 섹션이 불완전한 채로 나간다`);
+    return `[⚠️ 시스템 경고 — 반드시 메시지에 반영할 것]
+웹 검색 도구가 실패했다(${searchErrors.join(", ")}). 아래 시장 정보는 조사가 완료되지 않은 상태다.
+이건 "오늘 시장에 특별한 뉴스가 없었다"는 뜻이 절대 아니라 "시스템이 조사 자체를 못 했다"는 뜻이다.
+시장 섹션에 "확인 안 됨" 같은 평범한 표현으로 뭉개지 말고, 조사 실패 때문에 시장 정보를 못 싣는다는 걸 한 줄로 분명히 밝혀라.
+
+${text}`;
+  }
   return text;
 }
 
