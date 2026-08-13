@@ -103,6 +103,8 @@ export type PortfolioSummary = {
   dayDiff: number;
   dayPct: number;
   byCategory: { category: string; value: number; pct: number }[];
+  /** 계좌별 집계(note 필드가 계좌명). 절세계좌 최적화가 최우선 정책이라 계좌 단위 잔고가 필요하다. */
+  byAccount: { account: string; value: number; pct: number }[];
   movers: { name: string; account: string; dayPct: number; dayDiff: number; asOf: string | null }[];
   holdings: {
     name: string;
@@ -111,7 +113,11 @@ export type PortfolioSummary = {
     value: number;
     pct: number;
     dayPct: number;
+    /** 전일 대비 증감 '금액'. 등락률만으로는 그게 몇 원인지 감이 안 와서 기여도 분해에 쓴다. */
+    dayDiff: number;
     gainPct: number;
+    /** 매입 대비 평가손익 '금액' — 누적 기준 효자/골칫거리 종목을 뽑는 데 쓴다. */
+    gainDiff: number;
     asOf: string | null;
   }[];
   /** 시장별 시세 기준 거래일 — 메시지가 "오늘/어제"를 정확히 쓰게 하는 근거 */
@@ -144,6 +150,7 @@ export async function computePortfolio(holdings: Holding[]): Promise<PortfolioSu
     dayPct: number;
     dayDiff: number;
     gainPct: number;
+    gainDiff: number;
     asOf: string | null;
   }[] = [];
 
@@ -179,6 +186,7 @@ export async function computePortfolio(holdings: Holding[]): Promise<PortfolioSu
       dayPct,
       dayDiff: value - prevValue,
       gainPct: base ? ((value - base) / base) * 100 : 0,
+      gainDiff: value - base,
       asOf: q?.asOf ?? null,
     });
   }
@@ -195,6 +203,17 @@ export async function computePortfolio(holdings: Holding[]): Promise<PortfolioSu
     .sort((a, b) => b[1] - a[1])
     .map(([k, v]) => ({ category: k, value: v, pct: (v / total) * 100 }));
 
+  // note가 곧 계좌명이다("신한 ISA", "삼성 연금저축", "토스 미국주식"…). 비어 있으면 계좌 미상으로 묶는다.
+  const byAccount = Object.entries(
+    rows.reduce((m: Record<string, number>, r) => {
+      const key = r.account || "계좌 미상";
+      m[key] = (m[key] || 0) + r.value;
+      return m;
+    }, {})
+  )
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => ({ account: k, value: v, pct: (v / total) * 100 }));
+
   return {
     date: kstDate(),
     fx: fx.price,
@@ -206,6 +225,7 @@ export async function computePortfolio(holdings: Holding[]): Promise<PortfolioSu
     dayDiff: total - prevTotal,
     dayPct: prevTotal ? ((total - prevTotal) / prevTotal) * 100 : 0,
     byCategory,
+    byAccount,
     movers: movers
       .slice(0, 6)
       .map((m) => ({ name: m.name, account: m.account, dayPct: m.dayPct, dayDiff: m.dayDiff, asOf: m.asOf })),
@@ -216,7 +236,9 @@ export async function computePortfolio(holdings: Holding[]): Promise<PortfolioSu
       value: r.value,
       pct: (r.value / total) * 100,
       dayPct: r.dayPct,
+      dayDiff: r.dayDiff,
       gainPct: r.gainPct,
+      gainDiff: r.gainDiff,
       asOf: r.asOf,
     })),
     asOfByMarket: {

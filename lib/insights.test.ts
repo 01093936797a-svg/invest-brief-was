@@ -11,6 +11,8 @@ import {
   bigMovers,
   priceFailureWarning,
   marketFetchWarning,
+  contributionBreakdown,
+  leverageExposure,
   drawdownFromPeak,
   weeklyReturn,
   buildInsights,
@@ -44,6 +46,7 @@ function portfolio(overrides: Partial<PortfolioSummary> = {}): PortfolioSummary 
     dayDiff: 100_000,
     dayPct: 0.14,
     byCategory: [{ category: "stock", value: 70_000_000, pct: 100 }],
+    byAccount: [{ account: "신한 ISA", value: 70_000_000, pct: 100 }],
     movers: [],
     holdings: [],
     asOfByMarket: { kr: kstDate(), us: null, crypto: null },
@@ -178,6 +181,79 @@ test("지수 조회 실패는 '시장이 조용했다'와 구분되게 명시한
   const r = marketFetchWarning(market({ failures: ["코스피"] }));
   assert.ok(r);
   assert.match(r.text, /조용했다는 뜻이 아니다/);
+});
+
+// --- 기여도 분해 / 레버리지 ---
+
+/** holdings 항목 생성 헬퍼 */
+function h(name: string, account: string, dayDiff: number, value = 10_000_000, gainDiff = 0) {
+  return { name, account, category: "stock", value, pct: 10, dayPct: 1, dayDiff, gainPct: 5, gainDiff, asOf: kstDate() };
+}
+
+test("기여도: 총 증감이 어느 종목에서 왔는지 금액으로 분해한다", () => {
+  const r = contributionBreakdown(
+    portfolio({
+      dayDiff: 1_030_124,
+      holdings: [h("TIME 미국나스닥100액티브", "신한 ISA", 720_000), h("TQQQ", "토스", 280_000), h("이더리움", "업비트", 30_124)],
+    })
+  );
+  assert.ok(r);
+  assert.match(r.text, /오늘 \+1,030,124원의 내역/);
+  assert.match(r.text, /TIME 미국나스닥100액티브\(신한 ISA\) \+720,000원/);
+});
+
+test("기여도: 상위 3개를 넘는 나머지는 합계로 묶는다", () => {
+  const r = contributionBreakdown(
+    portfolio({
+      dayDiff: 1_000_000,
+      holdings: [h("A", "x", 400_000), h("B", "x", 300_000), h("C", "x", 200_000), h("D", "x", 60_000), h("E", "x", 40_000)],
+    })
+  );
+  assert.ok(r);
+  assert.match(r.text, /나머지 합계 \+100,000원/);
+});
+
+test("기여도: 총 증감이 미미하면(5만원 미만) 분해할 질문 자체가 성립 안 한다", () => {
+  const r = contributionBreakdown(portfolio({ dayDiff: 12_000, holdings: [h("A", "x", 12_000)] }));
+  assert.equal(r, null);
+});
+
+test("기여도: 음수도 부호가 중복되지 않는다", () => {
+  const r = contributionBreakdown(portfolio({ dayDiff: -800_000, holdings: [h("TQQQ", "토스", -800_000)] }));
+  assert.ok(r);
+  assert.match(r.text, /오늘 -800,000원의 내역/);
+  assert.ok(!/--/.test(r.text), `부호가 겹치면 안 된다: ${r.text}`);
+});
+
+test("레버리지: policy.ts 목록에 걸리는 종목의 비중을 계산한다", () => {
+  const r = leverageExposure(
+    portfolio({ total: 70_000_000, holdings: [h("TQQQ", "토스", 0, 14_000_000), h("TIME S&P500", "ISA", 0, 56_000_000)] })
+  );
+  assert.ok(r);
+  assert.match(r.text, /레버리지 상품 비중 20\.0%/);
+  assert.match(r.text, /TQQQ/);
+});
+
+test("레버리지: 5% 미만이면 매일 언급하지 않는다", () => {
+  const r = leverageExposure(
+    portfolio({ total: 70_000_000, holdings: [h("TQQQ", "토스", 0, 2_000_000), h("TIME S&P500", "ISA", 0, 68_000_000)] })
+  );
+  assert.equal(r, null);
+});
+
+test("레버리지: 보유가 없으면 조용히 빠진다", () => {
+  assert.equal(leverageExposure(portfolio({ holdings: [h("TIME S&P500", "ISA", 0)] })), null);
+});
+
+test("레버리지: 이름에 티커가 들어간 '현금' 행은 제외한다 (TQQQ 매매 대기현금)", () => {
+  // 이름만 보면 대기현금이 레버리지로 잡혀 노출이 두 배로 부풀려진다 — 실제로 그렇게 나왔었다.
+  const cash = { ...h("TQQQ 매매 대기현금", "토스", 0, 7_000_000), category: "cash" };
+  const r = leverageExposure(
+    portfolio({ total: 70_000_000, holdings: [h("TQQQ", "토스", 0, 12_600_000), cash] })
+  );
+  assert.ok(r);
+  assert.match(r.text, /18\.0%/, `대기현금이 빠진 12.6M/70M = 18.0%여야 한다: ${r.text}`);
+  assert.ok(!r.text.includes("대기현금"), "대기현금이 목록에 들어가면 안 된다");
 });
 
 // --- 이력 기반 ---

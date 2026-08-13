@@ -17,6 +17,11 @@ export type Insight = {
 
 const sgn = (n: number) => (n >= 0 ? "+" : "");
 const pct = (n: number) => `${sgn(n)}${n.toFixed(2)}%`;
+/**
+ * 부호를 그대로 살려 찍는다 — sgn()이 양수에만 "+"를 붙이고 음수는 빈 문자열을 주므로,
+ * 여기서 Math.abs를 쓰면 마이너스가 통째로 사라진다(실제로 한 번 그렇게 만들었다).
+ */
+const won = (n: number) => Math.round(n).toLocaleString("ko-KR");
 
 /**
  * 미장→국장 반영 갭. 이 프로젝트 전체의 핵심 논지인데 지금껏 LLM이 눈치채주길 바라고 있었다.
@@ -100,6 +105,53 @@ export function bigMovers(portfolio: PortfolioSummary): Insight[] {
     }));
 }
 
+/**
+ * 오늘 손익이 어디서 왔는지 금액으로 분해한다.
+ *
+ * 등락률만 있으면 "TQQQ +3.42%"가 몇 원인지 감이 안 온다 — 비중이 작으면 3.42%도 몇 만원이고,
+ * 크면 수십만원이다. 총 증감액과 종목별 등락률이 따로 노는 게 지금 브리핑의 제일 큰 정보 공백이라
+ * 기여 금액 상위 몇 개를 묶어서 준다.
+ */
+export function contributionBreakdown(portfolio: PortfolioSummary): Insight | null {
+  const moved = portfolio.holdings.filter((h) => Math.abs(h.dayDiff) >= 10_000);
+  if (moved.length === 0) return null;
+  // 총 증감이 거의 0이면 "어디서 왔나"라는 질문 자체가 성립하지 않는다(상쇄된 것뿐).
+  if (Math.abs(portfolio.dayDiff) < 50_000) return null;
+
+  const top = [...moved].sort((a, b) => Math.abs(b.dayDiff) - Math.abs(a.dayDiff)).slice(0, 3);
+  const parts = top.map((h) => `${h.name}(${h.account}) ${sgn(h.dayDiff)}${won(h.dayDiff)}원`);
+  const covered = top.reduce((s, h) => s + h.dayDiff, 0);
+  const rest = portfolio.dayDiff - covered;
+  const tail = Math.abs(rest) >= 10_000 ? `, 나머지 합계 ${sgn(rest)}${won(rest)}원` : "";
+  return {
+    text: `오늘 ${sgn(portfolio.dayDiff)}${won(portfolio.dayDiff)}원의 내역: ${parts.join(", ")}${tail}`,
+    priority: 90,
+  };
+}
+
+/**
+ * 레버리지 상품 비중. policy.ts가 "신규 미보유 + FNGU 처분 예정"이라고 선언해두고
+ * 현재 비중은 아무도 안 보고 있어서, 판단 없이 숫자만 꾸준히 띄운다.
+ * 3배 상품은 일간 수익률의 3배지 장기 수익률의 3배가 아니라, 보유가 길수록 변동성에 깎인다.
+ */
+export function leverageExposure(portfolio: PortfolioSummary): Insight | null {
+  const isLev = (name: string) =>
+    investmentPolicy.leveragedTickers.some((t) => name.toUpperCase().includes(t));
+  // category가 cash인 행은 이름에 티커가 들어가도 레버리지가 아니다 —
+  // "TQQQ 매매 대기현금"(매수 대기 현금)이 실제로 그렇다. 이름만 보면 노출이 두 배로 잡힌다.
+  const lev = portfolio.holdings.filter((h) => h.category !== "cash" && isLev(h.name));
+  if (!lev.length) return null;
+
+  const value = lev.reduce((s, h) => s + h.value, 0);
+  const pct = portfolio.total ? (value / portfolio.total) * 100 : 0;
+  if (pct < 5) return null; // 5% 미만이면 매일 언급할 만한 노출이 아니다
+  const names = lev.map((h) => h.name).join(", ");
+  return {
+    text: `레버리지 상품 비중 ${pct.toFixed(1)}% (${won(value)}원 — ${names}). 정책은 "신규 미보유·FNGU 처분 예정"이다.`,
+    priority: 65,
+  };
+}
+
 /** 가격을 못 구해 총액에서 빠진 종목이 있으면 최우선으로 알린다 — 총액 자체가 틀린 상태다. */
 export function priceFailureWarning(portfolio: PortfolioSummary): Insight | null {
   if (!portfolio.priceFailures.length) return null;
@@ -175,7 +227,9 @@ export function buildInsights(
     priceFailureWarning(portfolio),
     marketFetchWarning(market),
     reflectionGap(portfolio, market),
+    contributionBreakdown(portfolio),
     drawdownFromPeak(portfolio, history),
+    leverageExposure(portfolio),
     fxMove(portfolio),
     weeklyReturn(portfolio, history),
     ...bigMovers(portfolio),

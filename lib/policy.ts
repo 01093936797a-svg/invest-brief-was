@@ -18,6 +18,13 @@ export const investmentPolicy = {
   },
   volatilityPolicy:
     "레버리지·고변동 자산 신규 미보유 방침. FNGU(3배)는 처분 예정. 이더리움은 신규매수 없이 보유 관망.",
+  /**
+   * 레버리지 상품 판별용 — holdings의 name/ticker에 이 문자열이 들어가면 레버리지로 본다.
+   * 자동 판별할 방법이 없어서(상품명에 배수가 안 드러나는 경우도 많다) 명시적 목록으로 둔다.
+   * 위 volatilityPolicy가 "신규 미보유"라고 선언만 하고 현재 비중은 아무도 안 보고 있어서,
+   * lib/insights.ts가 이 목록으로 비중을 계산해 브리핑에 띄운다. 새 레버리지 상품을 사면 여기 추가할 것.
+   */
+  leveragedTickers: ["TQQQ", "FNGU", "SOXL", "TECL", "UPRO", "TMF"],
   decidedAt: "2026-07-13",
   source: "wealth-manager/research-team/fintech-planner 3팀 합의 (Claude Code, ~/.claude/agents/)",
 } as const;
