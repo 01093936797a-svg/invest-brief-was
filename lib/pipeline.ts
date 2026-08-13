@@ -8,6 +8,7 @@ import { loadHoldings, computePortfolio, type PortfolioSummary } from "./portfol
 import { fetchMarketSnapshot, formatMarketSnapshot, type MarketSnapshot } from "./market.js";
 import { buildInsights, formatInsights, type Insight } from "./insights.js";
 import { loadHistory, saveSnapshot } from "./snapshots.js";
+import { fetchHeadlines, formatHeadlines } from "./news.js";
 import { composeBrief, type BriefKind } from "./claude.js";
 
 export type AnalysisResult = {
@@ -23,12 +24,13 @@ export async function runAnalysis(kind: BriefKind): Promise<AnalysisResult> {
   const supabase = getSupabase();
   const holdings = await loadHoldings(supabase);
 
-  // 셋 다 서로 의존하지 않으니 같이 던진다 — 실행 시간이 곧 타임아웃 여유다.
-  // loadHistory는 실패해도 빈 배열을 주므로(테이블 미생성 포함) 여기서 터지지 않는다.
-  const [portfolio, market, history] = await Promise.all([
+  // 넷 다 서로 의존하지 않으니 같이 던진다 — 실행 시간이 곧 타임아웃 여유다.
+  // loadHistory/fetchHeadlines는 실패해도 빈 값을 주므로(테이블 미생성·피드 다운 포함) 여기서 터지지 않는다.
+  const [portfolio, market, history, headlines] = await Promise.all([
     computePortfolio(holdings),
     fetchMarketSnapshot(),
     loadHistory(supabase),
+    fetchHeadlines(),
   ]);
 
   const insights = buildInsights(portfolio, market, history);
@@ -38,7 +40,10 @@ export async function runAnalysis(kind: BriefKind): Promise<AnalysisResult> {
     "",
     "[규칙 기반 인사이트 — 이미 계산 끝난 사실. 재계산·재해석하지 말고 골라 쓸 것]",
     formatInsights(insights),
-  ].join("\n");
+    formatHeadlines(headlines), // 없으면 빈 문자열이라 섹션 자체가 안 생긴다
+  ]
+    .filter((s) => s !== "")
+    .join("\n");
 
   return { portfolio, market, insights, marketResearch, kind };
 }

@@ -136,10 +136,22 @@ test("환율: 0.5% 미만 변동은 언급하지 않는다", () => {
   assert.equal(fxMove(portfolio({ fxDayPct: 0.2 })), null);
 });
 
-test("환율: 큰 움직임은 방향까지 붙여 알린다", () => {
+test("환율 상승: '환율이 올랐다=원화 가치 하락'까지 문장으로 풀어준다", () => {
+  // "원화 약세" 네 글자만 주면 작성 모델이 요약하면서 "환율도 약세"로 주어를 뒤집는다
+  // (2026-08-14 아침 브리핑에서 실제로 그렇게 나갔다). 결론까지 적어줘야 못 뒤집는다.
   const r = fxMove(portfolio({ fx: 1400, fxDayPct: 1.2 }));
   assert.ok(r);
-  assert.match(r.text, /원화 약세/);
+  assert.match(r.text, /환율이 올랐다/);
+  assert.match(r.text, /원화 가치 하락/);
+  assert.match(r.text, /환산액은 그만큼 늘어난다/);
+});
+
+test("환율 하락: 반대 방향도 결론까지 뒤집힌다", () => {
+  const r = fxMove(portfolio({ fx: 1300, fxDayPct: -1.4 }));
+  assert.ok(r);
+  assert.match(r.text, /환율이 내렸다/);
+  assert.match(r.text, /원화 가치 상승/);
+  assert.match(r.text, /환산액은 그만큼 줄어든다/);
 });
 
 test("급등락: ±5% 이상만 잡고, 기준일이 오늘이 아니면 날짜를 밝힌다", () => {

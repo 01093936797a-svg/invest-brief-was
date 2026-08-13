@@ -66,13 +66,26 @@ export function allocationDrift(portfolio: PortfolioSummary): Insight[] {
   return out;
 }
 
-/** 환율이 의미 있게 움직였을 때만. 국내상장 미국지수 ETF는 환헤지 여부에 따라 환율을 그대로 탄다. */
+/** 환율 변동이 의미 있을 때만 나오는 임계치. factsBlock도 이 값을 참조해 하위 변동을 노이즈로 표시한다. */
+export const FX_NOISE_THRESHOLD_PCT = 0.5;
+
+/**
+ * 환율이 의미 있게 움직였을 때만. 국내상장 미국지수 ETF는 환헤지 여부에 따라 환율을 그대로 탄다.
+ *
+ * 방향 표현을 문장으로 풀어서 준다 — "원화 약세" 네 글자만 주면 작성 모델이 요약하면서
+ * "환율이 약세"로 주어를 바꿔버린다(2026-08-14 브리핑에서 실제로 그렇게 나갔다).
+ * 환율 숫자가 오른 것과 원화 가치가 내린 것은 같은 말인데 헷갈리기 쉬우니 결론까지 적어준다.
+ */
 export function fxMove(portfolio: PortfolioSummary): Insight | null {
   if (portfolio.fx == null || portfolio.fxDayPct == null) return null;
-  if (Math.abs(portfolio.fxDayPct) < 0.5) return null;
-  const dir = portfolio.fxDayPct > 0 ? "원화 약세" : "원화 강세";
+  if (Math.abs(portfolio.fxDayPct) < FX_NOISE_THRESHOLD_PCT) return null;
+  const won = Math.round(portfolio.fx).toLocaleString("ko-KR");
+  const detail =
+    portfolio.fxDayPct > 0
+      ? `환율이 올랐다(=원화 가치 하락). 달러표시 자산의 원화 환산액은 그만큼 늘어난다`
+      : `환율이 내렸다(=원화 가치 상승). 달러표시 자산의 원화 환산액은 그만큼 줄어든다`;
   return {
-    text: `USD/KRW ${Math.round(portfolio.fx).toLocaleString("ko-KR")}원 (${pct(portfolio.fxDayPct)}, ${dir})`,
+    text: `USD/KRW ${won}원 ${pct(portfolio.fxDayPct)} — ${detail}.`,
     priority: 50,
   };
 }

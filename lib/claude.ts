@@ -14,6 +14,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { PortfolioSummary } from "./portfolio.js";
 import { investmentPolicy } from "./policy.js";
+import { FX_NOISE_THRESHOLD_PCT } from "./insights.js";
 import { kstDate, kstWeekdayKo } from "./kst.js";
 
 export type BriefKind = "morning" | "evening";
@@ -47,7 +48,11 @@ export async function composeBrief(params: {
 [포트폴리오 실측치 — 이 숫자만 사용, 새로 조사하지 말 것]
 기준: ${priceBasis}
 날짜: ${portfolio.date}
-환율: ${portfolio.fx ? won(portfolio.fx) : "확인 안 됨"}원 (${portfolio.fxDayPct != null ? sgn(portfolio.fxDayPct) + portfolio.fxDayPct.toFixed(2) + "%" : "확인 안 됨"})
+환율: ${portfolio.fx ? won(portfolio.fx) : "확인 안 됨"}원 (${portfolio.fxDayPct != null ? sgn(portfolio.fxDayPct) + portfolio.fxDayPct.toFixed(2) + "%" : "확인 안 됨"})${
+    portfolio.fxDayPct != null && Math.abs(portfolio.fxDayPct) < FX_NOISE_THRESHOLD_PCT
+      ? " ※ 노이즈 수준의 변동이다. 한 줄 요약이나 판단에 올리지 말고, 굳이 쓴다면 자산 수치 옆에 곁들이는 정도로만."
+      : ""
+  }
 총 평가액: ${won(portfolio.total)}원${portfolio.priceFailures.length ? ` (⚠️ 가격 조회 실패로 미포함: ${portfolio.priceFailures.join(", ")} — 총액이 그만큼 낮게 잡혀 있음. 이 사실을 메시지에 한 줄로 짚어줘)` : ""}
 전일 대비: ${sgn(portfolio.dayDiff)}${won(portfolio.dayDiff)}원 (${sgn(portfolio.dayPct)}${portfolio.dayPct.toFixed(2)}%)
 평가손익(매입 대비): ${sgn(portfolio.gain)}${won(portfolio.gain)}원 (${portfolio.gainPct.toFixed(1)}%)
@@ -116,7 +121,7 @@ ${marketResearch}
 - 절세계좌 비중이 크다는 건 이미 잘하고 있는 것 — 걱정거리처럼 쓰지 않는다.
 - life-stage 프레임(내집마련 자금 타임라인, 리스크 한도 등)은 그날 실제로 관련 있을 때만 살짝 얹는다. 매일 억지로 끼워넣지 않는다.
 - 시장 이야기는 **내 보유종목에 실제로 연결되는 것만** 쓴다. 지수가 움직였어도 내 자산과 연결이 안 되면 뺀다. 일반 뉴스 요약지가 아니다.
-- **아래 데이터에는 지수·환율 같은 수치만 있고 뉴스가 없다.** 그래서 "왜 움직였는지"(연준·CPI·실적 등)는 알 수 없다 — 절대 추측해서 쓰지 마라. 이유를 모르면 이유를 빼고 움직임만 쓰면 된다. 그럴듯한 원인을 붙이는 게 이 브리핑에서 제일 위험한 실수다.
+- **"왜 움직였는지"는 알 수 없다 — 절대 추측해서 쓰지 마라.** 아래에 참고 헤드라인이 붙어 있을 수 있지만 그건 같은 시기의 기사 제목일 뿐 원인이 아니고, 본문도 읽지 않았다. 이유를 모르면 이유를 빼고 움직임만 쓰면 된다. 그럴듯한 원인을 붙이는 게 이 브리핑에서 제일 위험한 실수다.
 - 마찬가지로 데이터에 없는 예정 일정(오늘 밤 지표 발표 등)도 지어내지 마라. 해당 섹션은 "예정 일정 정보 없음"으로 두거나, 쓸 내용이 없으면 섹션을 통째로 줄여라.
 - [규칙 기반 인사이트] 항목들은 이미 계산이 끝난 사실이다. 숫자를 다시 계산하거나 다르게 해석하지 말고, 필요한 것만 골라 자연스러운 문장으로 풀어 써라.
 - 한 줄 요약에 이미 쓴 숫자·표현은 아래 섹션에서 반복하지 않는다.
