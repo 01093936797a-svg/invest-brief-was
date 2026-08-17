@@ -18,9 +18,23 @@ export const ACTION_PRICE = "price_input";
 
 // 아침·저녁이 각각 직전에 마감한 시장을 묻는다 — 아침은 간밤 미국장, 저녁은 오늘 한국장.
 // 두 시장의 매매를 각자 가장 가까운 시점에 물어보게 되어 중복 입력이 생기지 않는다.
-export function buildBriefBlocks(text: string, kind: BriefKind) {
+/**
+ * 브리핑 본문의 "📰 주요 헤드라인" 제목을 다이제스트 페이지로 가는 슬랙 링크로 바꾼다.
+ *
+ * URL을 작성 모델에게 맡기지 않고 코드에서 치환하는 이유: 모델이 URL을 조금이라도 바꾸면
+ * 깨진 링크가 그대로 발송된다. 제목 문자열만 찾아 감싸는 게 훨씬 안전하다.
+ * 링크를 못 만들면(=URL 미설정) 원문을 그대로 둔다 — 링크가 없을 뿐 브리핑은 멀쩡하다.
+ */
+export function linkifyNewsHeading(text: string, newsUrl: string | null): string {
+  if (!newsUrl) return text;
+  // 모델이 볼드(*…*)를 붙이거나 안 붙일 수 있어 양쪽 다 받는다. 줄 전체를 링크로 만든다.
+  return text.replace(/^\*?📰\s*주요 헤드라인\*?\s*$/m, `*<${newsUrl}|📰 주요 헤드라인>*`);
+}
+
+export function buildBriefBlocks(text: string, kind: BriefKind, newsUrl: string | null = null) {
+  const linked = linkifyNewsHeading(text, newsUrl);
   // section 블록 text는 3000자 제한 — 방어적으로 자름(정상 브리핑은 항상 그보다 훨씬 짧음).
-  const safeText = text.length > 2900 ? text.slice(0, 2900) + "…" : text;
+  const safeText = linked.length > 2900 ? linked.slice(0, 2900) + "…" : linked;
   const question = kind === "morning" ? "*간밤 미국장에서 매매하셨나요?*" : "*오늘 국장에서 매매하셨나요?*";
   return [
     { type: "section", text: { type: "mrkdwn", text: safeText } },

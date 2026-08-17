@@ -26,7 +26,22 @@ const FEEDS: Feed[] = [
   { url: "https://www.cnbc.com/id/100003114/device/rss/rss.html", source: "CNBC" },
 ];
 
-export type Headline = { title: string; source: string };
+export type Headline = {
+  title: string;
+  source: string;
+  /** 원문 링크. 다이제스트 페이지에서 "원문 보기"로 건다. 없을 수도 있다. */
+  link: string | null;
+  /** RSS description(요약문). 본문을 긁지 않고도 요약을 만들 수 있는 유일한 재료라 같이 뽑는다.
+   *  매체마다 있기도 없기도 하고, HTML이 섞여 오기도 해서 decode를 거친다. */
+  summary: string | null;
+  /** 한글이 거의 없으면 해외 매체로 본다 — 다이제스트에서 번역 대상을 고르는 기준. */
+  foreign: boolean;
+};
+
+/** 한글 음절이 하나도 없으면 해외 기사로 판정한다. 매체명으로 가르면 국내 매체의 영문 기사를 놓친다. */
+export function looksForeign(title: string): boolean {
+  return !/[가-힣]/.test(title);
+}
 
 /**
  * XML 엔티티와 CDATA를 풀어 사람이 읽는 제목으로 만든다.
@@ -49,7 +64,16 @@ function decode(raw: string): string {
     .trim();
 }
 
-/** <item>(RSS) 또는 <entry>(Atom) 안의 첫 <title>만 순서대로 뽑는다. */
+/** Atom의 링크는 <link href="..."/> 속성에, RSS는 <link>텍스트</link>에 들어간다. 둘 다 본다. */
+function extractLink(item: string): string | null {
+  const attr = item.match(/<link\b[^>]*\bhref=["']([^"']+)["']/);
+  if (attr) return attr[1];
+  const text = item.match(/<link\b[^>]*>([\s\S]*?)<\/link>/);
+  const v = text ? decode(text[1]) : "";
+  return /^https?:\/\//.test(v) ? v : null;
+}
+
+/** <item>(RSS) 또는 <entry>(Atom)에서 제목·링크·요약문을 순서대로 뽑는다. */
 export function parseHeadlines(xml: string, source: string, limit: number): Headline[] {
   const out: Headline[] = [];
   const items = xml.match(/<(item|entry)\b[\s\S]*?<\/\1>/g) ?? [];
@@ -59,7 +83,14 @@ export function parseHeadlines(xml: string, source: string, limit: number): Head
     const title = decode(m[1]);
     // 너무 짧으면 제목이 아니라 파싱 부스러기일 가능성이 높다.
     if (title.length < 8) continue;
-    out.push({ title, source });
+
+    // description(RSS) / summary·content(Atom) 중 먼저 걸리는 것을 요약문으로 쓴다.
+    const d = item.match(/<(description|summary|content)\b[^>]*>([\s\S]*?)<\/\1>/);
+    const raw = d ? decode(d[2]) : "";
+    // 제목을 그대로 복붙한 description을 주는 피드가 흔하다 — 그건 요약이 아니라 중복이다.
+    const summary = raw.length >= 20 && raw !== title ? raw.slice(0, 500) : null;
+
+    out.push({ title, source, link: extractLink(item), summary, foreign: looksForeign(title) });
     if (out.length >= limit) break;
   }
   return out;

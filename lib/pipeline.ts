@@ -8,7 +8,8 @@ import { loadHoldings, computePortfolio, type PortfolioSummary } from "./portfol
 import { fetchMarketSnapshot, formatMarketSnapshot, type MarketSnapshot } from "./market.js";
 import { buildInsights, formatInsights, type Insight } from "./insights.js";
 import { loadHistory, saveSnapshot } from "./snapshots.js";
-import { fetchHeadlines, formatHeadlines } from "./news.js";
+import { fetchHeadlines, formatHeadlines, type Headline } from "./news.js";
+import { buildDigest, saveDigest } from "./news-digest.js";
 import { composeBrief, type BriefKind } from "./claude.js";
 
 export type AnalysisResult = {
@@ -17,6 +18,8 @@ export type AnalysisResult = {
   insights: Insight[];
   /** composeBrief 프롬프트에 그대로 들어가는 사실 텍스트 — 모델이 새로 조사할 게 없도록 완결형으로 만든다. */
   marketResearch: string;
+  /** 다이제스트 페이지 재료. 브리핑 발송 후 recordNewsDigest()가 번역·요약해 저장한다. */
+  headlines: Headline[];
   kind: BriefKind;
 };
 
@@ -45,7 +48,7 @@ export async function runAnalysis(kind: BriefKind): Promise<AnalysisResult> {
     .filter((s) => s !== "")
     .join("\n");
 
-  return { portfolio, market, insights, marketResearch, kind };
+  return { portfolio, market, insights, marketResearch, headlines, kind };
 }
 
 /**
@@ -67,4 +70,20 @@ export async function runCompose(analysis: ComposeInput): Promise<string> {
  */
 export async function recordSnapshot(portfolio: PortfolioSummary): Promise<void> {
   await saveSnapshot(getSupabase(), portfolio);
+}
+
+/**
+ * 슬랙 링크가 여는 다이제스트 페이지 내용을 만들어 저장한다.
+ * 브리핑 발송 뒤에 부르므로, 여기서 뭐가 잘못돼도 이미 나간 브리핑에는 영향이 없다 —
+ * 링크를 눌렀을 때 "다이제스트가 없습니다" 페이지가 뜰 뿐이다. 그래서 예외를 밖으로 내지 않는다.
+ */
+export async function recordNewsDigest(headlines: Headline[], date: string, kind: BriefKind): Promise<boolean> {
+  if (!headlines.length) return false;
+  try {
+    const digest = await buildDigest(headlines);
+    return await saveDigest(getSupabase(), date, kind, digest);
+  } catch (err: any) {
+    console.error(`뉴스 다이제스트 생성 실패(브리핑에는 영향 없음): ${err?.message || String(err)}`);
+    return false;
+  }
 }
